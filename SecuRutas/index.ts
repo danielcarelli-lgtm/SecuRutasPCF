@@ -2,9 +2,11 @@ import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import * as atlas from "azure-maps-control";
 import * as React from "react";
 import { createRoot, Root } from "react-dom/client";
-import { ComboBox, IComboBoxOption, IComboBox, DatePicker, IconButton, IIconProps, initializeIcons } from '@fluentui/react';
+import { 
+    ComboBox, IComboBoxOption, IComboBox, DatePicker, IconButton, IIconProps, 
+    initializeIcons, Dialog, DialogType, DialogFooter, PrimaryButton 
+} from '@fluentui/react';
 
-// Inicializar iconos de Fluent UI para la lupa
 initializeIcons(undefined, { disableWarnings: true });
 
 interface GeoLocationPoint {
@@ -17,6 +19,7 @@ interface GeoLocationPoint {
 interface MarkerProperties {
     icon: string;
     title: string;
+    tooltipInfo: string;
 }
 
 export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IOutputs> {
@@ -25,16 +28,23 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
     private _mapContainer: HTMLDivElement;
     private _headerContainer: HTMLDivElement;
     private _versionContainer: HTMLDivElement;
+    
     private _map: atlas.Map;
     private _dataSource: atlas.source.DataSource;
+    private _symbolLayer: atlas.layer.SymbolLayer;
+    private _hoverPopup: atlas.Popup;
     
     private _selectedDate: Date = new Date();
     private _selectedResource: string | undefined;
     private _resources: IComboBoxOption[] = [];
     
+    private _showDialog = false;
+    private _dialogTitle = "";
+    private _dialogContent: React.ReactNode = null;
+
     private _webAPI: ComponentFramework.WebApi;
     private _root: Root;
-    private readonly _controlVersion: string = "v1.0.9";
+    private readonly _controlVersion = "v1.1.5";
 
     public init(context: ComponentFramework.Context<IInputs>, notifyOutputChanged: () => void, state: ComponentFramework.Dictionary, container: HTMLDivElement): void {
         this._context = context;
@@ -87,29 +97,60 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             this._dataSource = new atlas.source.DataSource();
             this._map.sources.add(this._dataSource);
 
+            // Capa para la línea de la ruta (SOLO pinta si la geometría es LineString)
             this._map.layers.add(new atlas.layer.LineLayer(this._dataSource, undefined, {
-                strokeColor: '#004b8b', // Azul oscuro acorde al nuevo diseño
-                strokeWidth: 4
+                strokeColor: '#004b8b',
+                strokeWidth: 4,
+                filter: ['==', ['geometry-type'], 'LineString']
             }));
 
-            this._map.layers.add(new atlas.layer.SymbolLayer(this._dataSource, undefined, {
+            // Capa para los iconos (SOLO pinta si la geometría es Point)
+            this._symbolLayer = new atlas.layer.SymbolLayer(this._dataSource, undefined, {
+                filter: ['==', ['geometry-type'], 'Point'],
                 iconOptions: {
-                    image: ['get', 'icon'],
-                    size: 1.2
-                },
-                textOptions: {
-                    textField: ['get', 'title'],
-                    offset: [0, 1.2],
-                    color: '#004b8b'
+                    image: ['coalesce', ['get', 'icon'], 'marker-blue'],
+                    allowOverlap: true, 
+                    ignorePlacement: true
                 }
-            }));
+            });
+            this._map.layers.add(this._symbolLayer);
+            
+            // Inicializar el Popup para el Tooltip
+            this._hoverPopup = new atlas.Popup({
+                pixelOffset: [0, -18],
+                closeButton: false,
+                fillColor: 'rgba(255,255,255,0.95)'
+            });
+
+            // Eventos del Tooltip
+            this._map.events.add('mouseover', this._symbolLayer, (e) => {
+                if (e.shapes && e.shapes.length > 0) {
+                    const shape = e.shapes[0];
+                    if (shape instanceof atlas.Shape) {
+                        const properties = shape.getProperties();
+                        const position = shape.getCoordinates() as atlas.data.Position;
+                        
+                        this._hoverPopup.setOptions({
+                            content: `<div style="padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px; color: #333;">
+                                        <strong style="color: #004b8b; font-size: 13px;">${properties.title || 'Punto'}</strong><br/>
+                                        <div style="margin-top: 5px;">${properties.tooltipInfo || ''}</div>
+                                      </div>`,
+                            position: position
+                        });
+                        this._hoverPopup.open(this._map);
+                    }
+                }
+            });
+
+            this._map.events.add('mouseleave', this._symbolLayer, () => {
+                this._hoverPopup.close();
+            });
             
             this._map.setCamera({
                 center: [-3.7038, 40.4168],
                 zoom: 10
             });
             
-            this.updateMap();
         });
         
         setTimeout(() => {
@@ -119,10 +160,10 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private async loadResources(): Promise<void> {
         try {
-            const result = await this._webAPI.retrieveMultipleRecords("bookableresource", "?$select=bookableresourceid,name&$filter=statecode eq 0");
+            const result = await this._webAPI.retrieveMultipleRecords("bookableresource", "?$select=name,_userid_value&$filter=statecode eq 0 and _userid_value ne null");
             
             this._resources = result.entities.map((entity: ComponentFramework.WebApi.Entity) => ({
-                key: entity.bookableresourceid,
+                key: entity._userid_value, 
                 text: entity.name
             }));
 
@@ -138,10 +179,15 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         }
     }
 
+    private closeDialog = (): void => {
+        this._showDialog = false;
+        this.renderHeader();
+    }
+
     private renderHeader(): void {
         const searchIcon: IIconProps = { iconName: 'Search' };
 
-        const control = React.createElement(
+        const headerCard = React.createElement(
             'div',
             { className: 'modern-header-card' },
             React.createElement(
@@ -158,7 +204,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                     onSelectDate: (date: Date | null | undefined) => {
                         if (date) {
                             this._selectedDate = date;
-                            // Solo repinta, NO busca
                             this.renderHeader(); 
                         }
                     },
@@ -172,7 +217,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                     onChange: (event: React.FormEvent<IComboBox>, option?: IComboBoxOption) => {
                         if (option) {
                             this._selectedResource = option.key as string;
-                            // Solo repinta, NO busca
                             this.renderHeader(); 
                         }
                     },
@@ -191,6 +235,22 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                 })
             )
         );
+
+        const dialog = React.createElement(Dialog, {
+            hidden: !this._showDialog,
+            onDismiss: this.closeDialog,
+            dialogContentProps: {
+                type: DialogType.largeHeader,
+                title: this._dialogTitle
+            }
+        },
+            this._dialogContent,
+            React.createElement(DialogFooter, null,
+                React.createElement(PrimaryButton, { onClick: this.closeDialog, text: "Aceptar" })
+            )
+        );
+
+        const control = React.createElement(React.Fragment, null, headerCard, dialog);
 
         if (!this._root) {
             this._root = createRoot(this._headerContainer);
@@ -213,32 +273,48 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             const startStr = startOfDay.toISOString();
             const endStr = endOfDay.toISOString();
 
-            const query = `?$select=msdyn_latitude,msdyn_longitude,createdon&$filter=_msdyn_resource_value eq ${this._selectedResource} and createdon ge ${startStr} and createdon le ${endStr}&$orderby=createdon asc`;
+            const query = `?$select=msdyn_latitude,msdyn_longitude,createdon&$filter=_msdyn_userid_value eq ${this._selectedResource} and createdon ge ${startStr} and createdon le ${endStr}&$orderby=createdon asc`;
             
-            console.log(`[SecuRutas] Ejecutando consulta WebAPI:`, query);
-
             const result = await this._webAPI.retrieveMultipleRecords("msdyn_geolocationtracking", query);
             
             if (!result || !result.entities || result.entities.length === 0) {
-                 console.log("[SecuRutas] No hay puntos para mostrar. Limpiando mapa.");
+                 this.renderHeader();
                  this.updateMap([]);
                  return;
             }
             
-            const points: GeoLocationPoint[] = result.entities.map((entity: ComponentFramework.WebApi.Entity) => ({
-                id: entity.msdyn_geolocationtrackingid,
-                lat: parseFloat(entity.msdyn_latitude),
-                lng: parseFloat(entity.msdyn_longitude),
-                timestamp: new Date(entity.createdon)
-            }));
+            const points: GeoLocationPoint[] = [];
+            
+            result.entities.forEach((entity: ComponentFramework.WebApi.Entity) => {
+                if (entity.msdyn_latitude != null && entity.msdyn_longitude != null) {
+                    const lat = parseFloat(entity.msdyn_latitude);
+                    const lng = parseFloat(entity.msdyn_longitude);
+                    
+                    if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
+                        points.push({
+                            id: entity.msdyn_geolocationtrackingid,
+                            lat: lat,
+                            lng: lng,
+                            timestamp: new Date(entity.createdon)
+                        });
+                    }
+                }
+            });
 
             this.updateMap(points);
 
         } catch (error) {
             console.error("[SecuRutas] FATAL ERROR consultando tracking:", error);
-            if (error instanceof Error) {
-                 console.error("[SecuRutas] Detalle:", error.message);
-            }
+            const errorMsg = error instanceof Error ? error.message : JSON.stringify(error);
+            
+            this._dialogTitle = "Error en la Búsqueda (Dataverse)";
+            this._dialogContent = React.createElement('div', null,
+                React.createElement('p', null, "Ha fallado la consulta a la tabla msdyn_geolocationtracking."),
+                React.createElement('pre', { style: { backgroundColor: '#ffe5e5', padding: '10px', borderRadius: '4px', overflowX: 'auto', fontSize: '12px' } }, errorMsg)
+            );
+            this._showDialog = true;
+            this.renderHeader();
+
             this.updateMap([]);
         }
     }
@@ -247,6 +323,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         if (!this._map || !this._dataSource) return;
 
         this._dataSource.clear();
+        if (this._hoverPopup) this._hoverPopup.close();
 
         if (points.length === 0) {
              this._map.setCamera({
@@ -256,40 +333,50 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             return;
         }
 
-        const coordinates = points.map(p => [p.lng, p.lat]);
-        const line = new atlas.data.LineString(coordinates);
-        this._dataSource.add(line);
+        // 1. Pintar la línea (envuelta correctamente como un Feature)
+        if (points.length > 1) {
+            const coordinates = points.map(p => [p.lng, p.lat]);
+            const lineFeature = new atlas.data.Feature(new atlas.data.LineString(coordinates));
+            this._dataSource.add(lineFeature);
+        }
 
+        // 2. Pintar los marcadores
         const markers: atlas.data.Feature<atlas.data.Point, MarkerProperties>[] = [];
 
         points.forEach((point, index) => {
-            let icon = 'marker-blue';
-            let title = '';
+            let icon = 'pin-blue'; 
+            let title = 'Punto de Ruta';
 
             if (index === 0) {
-                icon = 'marker-green';
-                title = 'Inicio';
+                icon = 'marker-blue';
+                title = 'Inicio de Ruta';
             } else if (index === points.length - 1) {
                 icon = 'marker-red';
-                title = 'Fin';
+                title = 'Fin de Ruta';
             }
 
-            if (index === 0 || index === points.length - 1) {
-                 markers.push(new atlas.data.Feature(new atlas.data.Point([point.lng, point.lat]), {
-                    icon: icon,
-                    title: title
-                }));
-            } else {
-                markers.push(new atlas.data.Feature(new atlas.data.Point([point.lng, point.lat]), {
-                    icon: 'pin-round-blue',
-                    title: '' 
-                }));
-            }
+            const timeString = point.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            markers.push(new atlas.data.Feature(new atlas.data.Point([point.lng, point.lat]), {
+                icon: icon,
+                title: title,
+                tooltipInfo: `<strong>Hora:</strong> ${timeString}<br/><strong>Lat:</strong> ${point.lat.toFixed(5)}<br/><strong>Lng:</strong> ${point.lng.toFixed(5)}`
+            }));
         });
 
         this._dataSource.add(markers);
 
-        const bounds = atlas.data.BoundingBox.fromData(line);
+        // 3. Ajustar la cámara para que englobe todos los puntos
+        const lats = points.map(p => p.lat);
+        const lngs = points.map(p => p.lng);
+        
+        const bounds = atlas.data.BoundingBox.fromEdges(
+            Math.min(...lngs),
+            Math.min(...lats),
+            Math.max(...lngs),
+            Math.max(...lats)
+        );
+
         this._map.setCamera({
             bounds: bounds,
             padding: 50 
