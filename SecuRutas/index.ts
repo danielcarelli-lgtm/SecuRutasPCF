@@ -30,7 +30,9 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
     private _versionContainer: HTMLDivElement;
     
     private _map: atlas.Map;
-    private _dataSource: atlas.source.DataSource;
+    // SOLUCIÓN: Separamos las fuentes de datos para evitar conflictos de geometría
+    private _lineSource: atlas.source.DataSource;
+    private _pointSource: atlas.source.DataSource;
     private _symbolLayer: atlas.layer.SymbolLayer;
     private _hoverPopup: atlas.Popup;
     
@@ -44,7 +46,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private _webAPI: ComponentFramework.WebApi;
     private _root: Root;
-    private readonly _controlVersion = "v1.1.5";
+    private readonly _controlVersion = "v1.1.7";
 
     public init(context: ComponentFramework.Context<IInputs>, notifyOutputChanged: () => void, state: ComponentFramework.Dictionary, container: HTMLDivElement): void {
         this._context = context;
@@ -94,21 +96,22 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         this._map = new atlas.Map(this._mapContainer, mapOptions);
 
         this._map.events.add('ready', () => {
-            this._dataSource = new atlas.source.DataSource();
-            this._map.sources.add(this._dataSource);
+            // Inicializar fuentes independientes
+            this._lineSource = new atlas.source.DataSource();
+            this._pointSource = new atlas.source.DataSource();
+            this._map.sources.add(this._lineSource);
+            this._map.sources.add(this._pointSource);
 
-            // Capa para la línea de la ruta (SOLO pinta si la geometría es LineString)
-            this._map.layers.add(new atlas.layer.LineLayer(this._dataSource, undefined, {
+            // Capa exclusiva para la ruta (ya no requiere filtros)
+            this._map.layers.add(new atlas.layer.LineLayer(this._lineSource, undefined, {
                 strokeColor: '#004b8b',
-                strokeWidth: 4,
-                filter: ['==', ['geometry-type'], 'LineString']
+                strokeWidth: 4
             }));
 
-            // Capa para los iconos (SOLO pinta si la geometría es Point)
-            this._symbolLayer = new atlas.layer.SymbolLayer(this._dataSource, undefined, {
-                filter: ['==', ['geometry-type'], 'Point'],
+            // Capa exclusiva para los waypoints (ya no requiere filtros)
+            this._symbolLayer = new atlas.layer.SymbolLayer(this._pointSource, undefined, {
                 iconOptions: {
-                    image: ['coalesce', ['get', 'icon'], 'marker-blue'],
+                    image: ['get', 'icon'], // Leerá directamente la propiedad 'icon'
                     allowOverlap: true, 
                     ignorePlacement: true
                 }
@@ -122,7 +125,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                 fillColor: 'rgba(255,255,255,0.95)'
             });
 
-            // Eventos del Tooltip
+            // Eventos del Tooltip atados a la capa de puntos
             this._map.events.add('mouseover', this._symbolLayer, (e) => {
                 if (e.shapes && e.shapes.length > 0) {
                     const shape = e.shapes[0];
@@ -131,9 +134,9 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                         const position = shape.getCoordinates() as atlas.data.Position;
                         
                         this._hoverPopup.setOptions({
-                            content: `<div style="padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px; color: #333;">
-                                        <strong style="color: #004b8b; font-size: 13px;">${properties.title || 'Punto'}</strong><br/>
-                                        <div style="margin-top: 5px;">${properties.tooltipInfo || ''}</div>
+                            content: `<div style="padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px; color: #333; min-width: 120px;">
+                                        <strong style="color: #004b8b; font-size: 13px;">${properties.title}</strong><br/>
+                                        <div style="margin-top: 5px;">${properties.tooltipInfo}</div>
                                       </div>`,
                             position: position
                         });
@@ -320,9 +323,11 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
     }
 
     private updateMap(points: GeoLocationPoint[] = []): void {
-        if (!this._map || !this._dataSource) return;
+        if (!this._map || !this._lineSource || !this._pointSource) return;
 
-        this._dataSource.clear();
+        // Limpiamos fuentes independientes
+        this._lineSource.clear();
+        this._pointSource.clear();
         if (this._hoverPopup) this._hoverPopup.close();
 
         if (points.length === 0) {
@@ -333,26 +338,26 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             return;
         }
 
-        // 1. Pintar la línea (envuelta correctamente como un Feature)
+        // 1. Pintar la línea en su propio DataSource
         if (points.length > 1) {
-            const coordinates = points.map(p => [p.lng, p.lat]);
-            const lineFeature = new atlas.data.Feature(new atlas.data.LineString(coordinates));
-            this._dataSource.add(lineFeature);
+            const coordinates: atlas.data.Position[] = points.map(point => [point.lng, point.lat]);
+            const route = new atlas.data.Feature(new atlas.data.LineString(coordinates));
+            this._lineSource.add(route);
         }
 
-        // 2. Pintar los marcadores
+        // 2. Pintar los marcadores en su propio DataSource
         const markers: atlas.data.Feature<atlas.data.Point, MarkerProperties>[] = [];
 
         points.forEach((point, index) => {
-            let icon = 'pin-blue'; 
-            let title = 'Punto de Ruta';
+            let icon = 'pin-round-blue'; 
+            let title = 'Waypoint';
 
             if (index === 0) {
                 icon = 'marker-blue';
-                title = 'Inicio de Ruta';
+                title = 'Inicio';
             } else if (index === points.length - 1) {
                 icon = 'marker-red';
-                title = 'Fin de Ruta';
+                title = 'Fin';
             }
 
             const timeString = point.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -364,7 +369,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             }));
         });
 
-        this._dataSource.add(markers);
+        this._pointSource.add(markers);
 
         // 3. Ajustar la cámara para que englobe todos los puntos
         const lats = points.map(p => p.lat);
