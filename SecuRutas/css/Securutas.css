@@ -1,0 +1,98 @@
+/* Contenedor general simulando un fondo de aplicación moderno */
+.secu-rutas-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: 100%;
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+    position: relative;
+    background-color: #f5f6f8; /* Fondo gris muy suave */
+    padding: 15px;
+    box-sizing: border-box;
+    gap: 15px;
+}
+
+/* Tarjeta de la cabecera */
+.modern-header-card {
+    display: flex;
+    flex-direction: column;
+    background-color: #ffffff;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05), 0 0 1px rgba(0, 0, 0, 0.1);
+    padding: 20px 25px;
+    gap: 15px;
+}
+
+/* Título de la tarjeta */
+.modern-header-title {
+    border-bottom: 1px solid #f0f0f0;
+    padding-bottom: 12px;
+}
+
+.modern-header-title h2 {
+    margin: 0;
+    font-size: 18px;
+    color: #004b8b; /* Azul oscuro basado en tu imagen */
+    font-weight: 600;
+}
+
+/* Contenedor de inputs y botón */
+.modern-header-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+/* Estilo personalizado para el botón de buscar (lupa) */
+.modern-search-button {
+    background-color: #004b8b !important; /* Fondo azul */
+    color: white !important;
+    border-radius: 50% !important; /* Botón circular */
+    width: 44px !important;
+    height: 44px !important;
+    margin-bottom: 2px; /* Alineación con los campos de texto */
+    box-shadow: 0 4px 8px rgba(0, 75, 139, 0.25);
+    transition: transform 0.2s, background-color 0.2s;
+}
+
+.modern-search-button i {
+    font-size: 18px !important;
+    font-weight: bold;
+}
+
+.modern-search-button:hover {
+    background-color: #003666 !important; /* Azul más oscuro al pasar el ratón */
+    transform: translateY(-2px); /* Ligera elevación */
+}
+
+.modern-search-button:active {
+    transform: translateY(0);
+}
+
+/* Contenedor del mapa en formato tarjeta */
+.secu-rutas-map {
+    flex-grow: 1;
+    width: 100%;
+    min-height: 400px;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05), 0 0 1px rgba(0, 0, 0, 0.1);
+    border: 1px solid #eaeaea;
+    background-color: #ffffff;
+}
+
+/* Versionado discreto abajo a la derecha */
+.secu-rutas-version {
+    position: absolute;
+    bottom: 25px;
+    right: 25px;
+    font-size: 10px;
+    color: #888888;
+    z-index: 1000;
+    pointer-events: none;
+    background: rgba(255, 255, 255, 0.85);
+    padding: 3px 6px;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}

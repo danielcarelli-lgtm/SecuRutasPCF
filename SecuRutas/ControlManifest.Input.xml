@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<manifest>
+  <control namespace="sec" constructor="SecuRutas" version="1.0.9" display-name-key="SecuRutas" description-key="SecuRutas" control-type="standard">
+    <property name="azureMapsKey" display-name-key="Azure Maps Key" description-key="Clave de suscripcion de Azure Maps" of-type="SingleLine.Text" usage="input" required="true" />
+    <property name="azureMapsUrl" display-name-key="Azure Maps URL" description-key="URL de Azure Maps" of-type="SingleLine.Text" usage="input" required="false" />
+    <resources>
+      <code path="index.ts" order="1"/>
+      <css path="css/SecuRutas.css" order="1" />
+      <css path="css/atlas.min.css" order="2"/>
+    </resources>
+    <feature-usage>
+      <uses-feature name="WebAPI" required="true" />
+    </feature-usage>
+  </control>
+</manifest>
