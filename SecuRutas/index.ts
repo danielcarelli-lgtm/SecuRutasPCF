@@ -2,51 +2,40 @@ import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import * as atlas from "azure-maps-control";
 import * as React from "react";
 import { createRoot, Root } from "react-dom/client";
-import { 
-    ComboBox, IComboBoxOption, IComboBox, DatePicker, IconButton, IIconProps, 
-    initializeIcons, Dialog, DialogType, DialogFooter, PrimaryButton 
-} from '@fluentui/react';
+import { ComboBox, IComboBoxOption, IComboBox, DatePicker, IconButton, initializeIcons } from '@fluentui/react';
 
 initializeIcons(undefined, { disableWarnings: true });
-
-interface GeoLocationPoint {
-    id: string;
-    lat: number;
-    lng: number;
-    timestamp: Date;
-}
-
-interface MarkerProperties {
-    icon: string;
-    title: string;
-    tooltipInfo: string;
-}
 
 export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IOutputs> {
     private _container: HTMLDivElement;
     private _context: ComponentFramework.Context<IInputs>;
     private _mapContainer: HTMLDivElement;
     private _headerContainer: HTMLDivElement;
-    private _versionContainer: HTMLDivElement;
-    
-    private _map: atlas.Map;
-    // SOLUCIÓN: Separamos las fuentes de datos para evitar conflictos de geometría
-    private _lineSource: atlas.source.DataSource;
-    private _pointSource: atlas.source.DataSource;
-    private _symbolLayer: atlas.layer.SymbolLayer;
-    private _hoverPopup: atlas.Popup;
-    
+
+    private _map: atlas.Map | undefined;
+    private _dataSource: atlas.source.DataSource | undefined;
+    private _routeSvg: SVGSVGElement | undefined;
+    private _routeHalo: SVGPolylineElement | undefined;
+    private _routeLine: SVGPolylineElement | undefined;
+    private _routePositions: atlas.data.Position[] = [];
+    private _isMapReady = false;
+    private _resizeObserver: ResizeObserver | undefined;
+    private _pendingCoords: number[][] | undefined;
+
     private _selectedDate: Date = new Date();
     private _selectedResource: string | undefined;
     private _resources: IComboBoxOption[] = [];
-    
-    private _showDialog = false;
-    private _dialogTitle = "";
-    private _dialogContent: React.ReactNode = null;
+
+    private _status = "";
+    private _mapError = "";
+    private _loading = false;
 
     private _webAPI: ComponentFramework.WebApi;
     private _root: Root;
-    private readonly _controlVersion = "v1.1.7";
+    private readonly _controlVersion = "v1.1.30";
+
+    private readonly _pageSize = 5000;
+    private readonly _maxPages = 20;
 
     public init(context: ComponentFramework.Context<IInputs>, notifyOutputChanged: () => void, state: ComponentFramework.Dictionary, container: HTMLDivElement): void {
         this._context = context;
@@ -55,217 +44,267 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
         const mainDiv = document.createElement("div");
         mainDiv.className = "secu-rutas-container";
+        mainDiv.style.display = "flex";
+        mainDiv.style.flexDirection = "column";
+        mainDiv.style.width = "100%";
+        mainDiv.style.height = "100%";
+        mainDiv.style.minHeight = "500px";
 
         this._headerContainer = document.createElement("div");
         this._headerContainer.className = "secu-rutas-header";
 
         this._mapContainer = document.createElement("div");
         this._mapContainer.className = "secu-rutas-map";
-
-        this._versionContainer = document.createElement("div");
-        this._versionContainer.className = "secu-rutas-version";
-        this._versionContainer.innerText = this._controlVersion;
+        this._mapContainer.style.flex = "1 1 auto";
+        this._mapContainer.style.minHeight = "400px";
+        this._mapContainer.style.position = "relative";
 
         mainDiv.appendChild(this._headerContainer);
         mainDiv.appendChild(this._mapContainer);
-        mainDiv.appendChild(this._versionContainer);
+
+        const versionDiv = document.createElement("div");
+        versionDiv.className = "secu-rutas-version";
+        versionDiv.innerText = this._controlVersion;
+        mainDiv.appendChild(versionDiv);
+
         this._container.appendChild(mainDiv);
 
+        this.renderHeader();
         this.initMap();
-        this.loadResources();
+        void this.loadResources();
     }
 
     private initMap(): void {
         const azureMapsKey = this._context.parameters.azureMapsKey.raw;
-        const azureMapsUrl = this._context.parameters.azureMapsUrl.raw;
-
         if (!azureMapsKey) {
-            this._mapContainer.innerHTML = "<div style='padding: 20px; color: red;'>Falta la clave de Azure Maps en la configuración.</div>";
+            this.setStatus("⚠ azureMapsKey vacío: el mapa no se puede inicializar.");
             return;
         }
 
-        const mapOptions: atlas.ServiceOptions & atlas.StyleOptions & atlas.UserInteractionOptions & (atlas.CameraOptions | atlas.CameraBoundsOptions) = {
+        atlas.setDomain("eu.atlas.microsoft.com");
+
+        const map = new atlas.Map(this._mapContainer, {
             authOptions: {
                 authType: atlas.AuthenticationType.subscriptionKey,
                 subscriptionKey: azureMapsKey
             },
-            view: 'Auto',
-            style: 'road'
-        };
-
-        this._map = new atlas.Map(this._mapContainer, mapOptions);
-
-        this._map.events.add('ready', () => {
-            // Inicializar fuentes independientes
-            this._lineSource = new atlas.source.DataSource();
-            this._pointSource = new atlas.source.DataSource();
-            this._map.sources.add(this._lineSource);
-            this._map.sources.add(this._pointSource);
-
-            // Capa exclusiva para la ruta (ya no requiere filtros)
-            this._map.layers.add(new atlas.layer.LineLayer(this._lineSource, undefined, {
-                strokeColor: '#004b8b',
-                strokeWidth: 4
-            }));
-
-            // Capa exclusiva para los waypoints (ya no requiere filtros)
-            this._symbolLayer = new atlas.layer.SymbolLayer(this._pointSource, undefined, {
-                iconOptions: {
-                    image: ['get', 'icon'], // Leerá directamente la propiedad 'icon'
-                    allowOverlap: true, 
-                    ignorePlacement: true
-                }
-            });
-            this._map.layers.add(this._symbolLayer);
-            
-            // Inicializar el Popup para el Tooltip
-            this._hoverPopup = new atlas.Popup({
-                pixelOffset: [0, -18],
-                closeButton: false,
-                fillColor: 'rgba(255,255,255,0.95)'
-            });
-
-            // Eventos del Tooltip atados a la capa de puntos
-            this._map.events.add('mouseover', this._symbolLayer, (e) => {
-                if (e.shapes && e.shapes.length > 0) {
-                    const shape = e.shapes[0];
-                    if (shape instanceof atlas.Shape) {
-                        const properties = shape.getProperties();
-                        const position = shape.getCoordinates() as atlas.data.Position;
-                        
-                        this._hoverPopup.setOptions({
-                            content: `<div style="padding: 10px; font-family: 'Segoe UI', sans-serif; font-size: 12px; color: #333; min-width: 120px;">
-                                        <strong style="color: #004b8b; font-size: 13px;">${properties.title}</strong><br/>
-                                        <div style="margin-top: 5px;">${properties.tooltipInfo}</div>
-                                      </div>`,
-                            position: position
-                        });
-                        this._hoverPopup.open(this._map);
-                    }
-                }
-            });
-
-            this._map.events.add('mouseleave', this._symbolLayer, () => {
-                this._hoverPopup.close();
-            });
-            
-            this._map.setCamera({
-                center: [-3.7038, 40.4168],
-                zoom: 10
-            });
-            
+            domain: "eu.atlas.microsoft.com",
+            view: "Auto",
+            center: [-3.7038, 40.4168],
+            zoom: 10,
+            style: "road"
         });
-        
-        setTimeout(() => {
-            if (this._map) this._map.events.invoke('resize', null);
-        }, 500);
+        this._map = map;
+
+        map.events.add("error", (e: unknown) => {
+            console.error("[SecuRutas] Error del mapa:", e);
+            const inner = (e as { error?: { message?: string } })?.error;
+            this._mapError = "⚠ Azure Maps: " + (inner?.message ?? this.errMsg(e));
+            this.renderHeader();
+        });
+
+        map.events.add("ready", () => {
+            const ds = new atlas.source.DataSource();
+            map.sources.add(ds);
+            this._dataSource = ds;
+
+            map.layers.add(
+                new atlas.layer.SymbolLayer(ds, undefined, {
+                    filter: ["==", ["geometry-type"], "Point"],
+                    iconOptions: {
+                        image: ["coalesce", ["get", "icon"], "marker-blue"],
+                        allowOverlap: true,
+                        ignorePlacement: true
+                    },
+                    textOptions: {
+                        textField: ["get", "title"],
+                        offset: [0, 1.2]
+                    }
+                })
+            );
+
+            this.createRouteOverlay();
+            map.events.add("render", () => this.drawRoute());
+            this._isMapReady = true;
+            this.safeResize();
+
+            if (this._pendingCoords) {
+                const pending = this._pendingCoords;
+                this._pendingCoords = undefined;
+                this.updateMap(pending);
+            }
+        });
+
+        if (typeof ResizeObserver !== "undefined") {
+            this._resizeObserver = new ResizeObserver(() => this.safeResize());
+            this._resizeObserver.observe(this._mapContainer);
+        }
+    }
+
+    private safeResize(): void {
+        if (!this._isMapReady || !this._map) return;
+        try {
+            this._map.resize();
+        } catch (e) {
+            console.warn("[SecuRutas] resize ignorado:", e);
+        }
+    }
+
+    private updateMap(coords: number[][]): void {
+        if (!this._isMapReady || !this._dataSource || !this._map) {
+            this._pendingCoords = coords;
+            return;
+        }
+
+        const ds = this._dataSource;
+        ds.clear();
+        this._routePositions = coords.map(coord => [coord[0], coord[1]]);
+
+        if (coords.length === 0) {
+            this.drawRoute();
+            return;
+        }
+
+        const features: atlas.data.Feature<atlas.data.Point, { icon: string; title: string }>[] = [];
+
+        coords.forEach((c, index) => {
+            let icon = "pin-round-blue";
+            let title = "";
+
+            if (index === 0) {
+                icon = "marker-blue";
+                title = "Inicio";
+            } else if (index === coords.length - 1) {
+                icon = "marker-red";
+                title = "Fin";
+            }
+
+            features.push(new atlas.data.Feature(
+                new atlas.data.Point([c[0], c[1]]),
+                { icon, title }
+            ));
+        });
+
+        ds.add(new atlas.data.FeatureCollection(features));
+        this.drawRoute();
+
+        let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+        for (const c of coords) {
+            if (c[0] < minLng) minLng = c[0];
+            if (c[0] > maxLng) maxLng = c[0];
+            if (c[1] < minLat) minLat = c[1];
+            if (c[1] > maxLat) maxLat = c[1];
+        }
+
+        this.safeResize();
+
+        if (Math.abs(maxLat - minLat) > 0.0001 || Math.abs(maxLng - minLng) > 0.0001) {
+            this._map.setCamera({
+                bounds: atlas.data.BoundingBox.fromEdges(minLng, minLat, maxLng, maxLat),
+                padding: 50
+            });
+        } else {
+            this._map.setCamera({ center: [coords[0][0], coords[0][1]], zoom: 15 });
+        }
+    }
+
+    private createRouteOverlay(): void {
+        const svgNamespace = "http://www.w3.org/2000/svg";
+        const svg = document.createElementNS(svgNamespace, "svg");
+        svg.setAttribute("aria-hidden", "true");
+        svg.style.position = "absolute";
+        svg.style.inset = "0";
+        svg.style.width = "100%";
+        svg.style.height = "100%";
+        svg.style.overflow = "hidden";
+        svg.style.pointerEvents = "none";
+        svg.style.zIndex = "1";
+
+        const halo = document.createElementNS(svgNamespace, "polyline");
+        halo.setAttribute("fill", "none");
+        halo.setAttribute("stroke", "#ffffff");
+        halo.setAttribute("stroke-width", "8");
+        halo.setAttribute("stroke-linecap", "round");
+        halo.setAttribute("stroke-linejoin", "round");
+        halo.setAttribute("vector-effect", "non-scaling-stroke");
+
+        const line = document.createElementNS(svgNamespace, "polyline");
+        line.setAttribute("fill", "none");
+        line.setAttribute("stroke", "#004b8b");
+        line.setAttribute("stroke-width", "5");
+        line.setAttribute("stroke-linecap", "round");
+        line.setAttribute("stroke-linejoin", "round");
+        line.setAttribute("vector-effect", "non-scaling-stroke");
+
+        svg.appendChild(halo);
+        svg.appendChild(line);
+        this._mapContainer.appendChild(svg);
+        this._routeSvg = svg;
+        this._routeHalo = halo;
+        this._routeLine = line;
+    }
+
+    private drawRoute(): void {
+        if (!this._map || !this._routeSvg || !this._routeHalo || !this._routeLine) return;
+        if (this._routePositions.length < 2) {
+            this._routeHalo.setAttribute("points", "");
+            this._routeLine.setAttribute("points", "");
+            return;
+        }
+
+        const pixels = this._map.positionsToPixels(this._routePositions);
+        if (pixels.some(pixel => !Number.isFinite(pixel[0]) || !Number.isFinite(pixel[1]))) return;
+
+        const path = pixels.map(pixel => `${pixel[0]},${pixel[1]}`).join(" ");
+        this._routeHalo.setAttribute("points", path);
+        this._routeLine.setAttribute("points", path);
     }
 
     private async loadResources(): Promise<void> {
         try {
-            const result = await this._webAPI.retrieveMultipleRecords("bookableresource", "?$select=name,_userid_value&$filter=statecode eq 0 and _userid_value ne null");
-            
+            const queryOptions = "?$select=name,_userid_value&$filter=statecode eq 0 and _userid_value ne null&$orderby=name asc";
+            const result = await this._webAPI.retrieveMultipleRecords("bookableresource", queryOptions);
+
             this._resources = result.entities.map((entity: ComponentFramework.WebApi.Entity) => ({
-                key: entity._userid_value, 
-                text: entity.name
+                key: entity._userid_value as string,
+                text: entity.name as string
             }));
 
-            this.renderHeader();
-            
             if (this._resources.length > 0 && !this._selectedResource) {
                 this._selectedResource = this._resources[0].key as string;
-                this.renderHeader(); 
             }
 
+            this.setStatus(`${this._resources.length} recursos cargados.`);
         } catch (error) {
             console.error("[SecuRutas] Error cargando recursos:", error);
+            this.setStatus("⚠ Error cargando recursos: " + this.errMsg(error));
         }
     }
 
-    private closeDialog = (): void => {
-        this._showDialog = false;
-        this.renderHeader();
-    }
+    private async fetchAll(entityName: string, firstOptions: string): Promise<ComponentFramework.WebApi.Entity[]> {
+        const all: ComponentFramework.WebApi.Entity[] = [];
+        let options = firstOptions;
 
-    private renderHeader(): void {
-        const searchIcon: IIconProps = { iconName: 'Search' };
+        for (let page = 0; page < this._maxPages; page++) {
+            const result = await this._webAPI.retrieveMultipleRecords(entityName, options, this._pageSize);
+            all.push(...result.entities);
 
-        const headerCard = React.createElement(
-            'div',
-            { className: 'modern-header-card' },
-            React.createElement(
-                'div',
-                { className: 'modern-header-title' },
-                React.createElement('h2', null, 'Seguimiento de Rutas')
-            ),
-            React.createElement(
-                'div',
-                { className: 'modern-header-controls' },
-                React.createElement(DatePicker, {
-                    label: "Fecha",
-                    value: this._selectedDate,
-                    onSelectDate: (date: Date | null | undefined) => {
-                        if (date) {
-                            this._selectedDate = date;
-                            this.renderHeader(); 
-                        }
-                    },
-                    styles: { root: { width: 160 } }
-                }),
-                React.createElement(ComboBox, {
-                    label: "Recurso Técnico",
-                    selectedKey: this._selectedResource,
-                    allowFreeform: true,
-                    autoComplete: 'on',
-                    onChange: (event: React.FormEvent<IComboBox>, option?: IComboBoxOption) => {
-                        if (option) {
-                            this._selectedResource = option.key as string;
-                            this.renderHeader(); 
-                        }
-                    },
-                    placeholder: "Buscar recurso...",
-                    options: this._resources,
-                    styles: { root: { width: 320 } }
-                }),
-                React.createElement(IconButton, {
-                    iconProps: searchIcon,
-                    title: "Buscar rutas",
-                    ariaLabel: "Buscar rutas",
-                    onClick: () => {
-                        this.fetchTrackingData();
-                    },
-                    className: 'modern-search-button'
-                })
-            )
-        );
-
-        const dialog = React.createElement(Dialog, {
-            hidden: !this._showDialog,
-            onDismiss: this.closeDialog,
-            dialogContentProps: {
-                type: DialogType.largeHeader,
-                title: this._dialogTitle
-            }
-        },
-            this._dialogContent,
-            React.createElement(DialogFooter, null,
-                React.createElement(PrimaryButton, { onClick: this.closeDialog, text: "Aceptar" })
-            )
-        );
-
-        const control = React.createElement(React.Fragment, null, headerCard, dialog);
-
-        if (!this._root) {
-            this._root = createRoot(this._headerContainer);
+            if (!result.nextLink) break;
+            const idx = result.nextLink.indexOf("?");
+            if (idx < 0) break;
+            options = result.nextLink.substring(idx);
         }
-        
-        this._root.render(control);
+        return all;
     }
 
     private async fetchTrackingData(): Promise<void> {
         if (!this._selectedResource || !this._selectedDate) {
+            this.setStatus("⚠ Selecciona una fecha y un recurso.");
             return;
         }
+
+        this._loading = true;
+        this.setStatus("Buscando…");
 
         try {
             const startOfDay = new Date(this._selectedDate);
@@ -276,137 +315,160 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             const startStr = startOfDay.toISOString();
             const endStr = endOfDay.toISOString();
 
-            const query = `?$select=msdyn_latitude,msdyn_longitude,createdon&$filter=_msdyn_userid_value eq ${this._selectedResource} and createdon ge ${startStr} and createdon le ${endStr}&$orderby=createdon asc`;
-            
-            const result = await this._webAPI.retrieveMultipleRecords("msdyn_geolocationtracking", query);
-            
-            if (!result || !result.entities || result.entities.length === 0) {
-                 this.renderHeader();
-                 this.updateMap([]);
-                 return;
-            }
-            
-            const points: GeoLocationPoint[] = [];
-            
-            result.entities.forEach((entity: ComponentFramework.WebApi.Entity) => {
-                if (entity.msdyn_latitude != null && entity.msdyn_longitude != null) {
-                    const lat = parseFloat(entity.msdyn_latitude);
-                    const lng = parseFloat(entity.msdyn_longitude);
-                    
-                    if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
-                        points.push({
-                            id: entity.msdyn_geolocationtrackingid,
-                            lat: lat,
-                            lng: lng,
-                            timestamp: new Date(entity.createdon)
-                        });
-                    }
+            const options = "?$select=msdyn_latitude,msdyn_longitude,msdyn_date" +
+                "&$filter=_msdyn_userid_value eq " + this._selectedResource +
+                " and msdyn_date ge " + startStr + " and msdyn_date le " + endStr +
+                "&$orderby=msdyn_date asc";
+
+            const entities = await this.fetchAll("msdyn_geolocationtracking", options);
+
+            const coords: number[][] = [];
+            for (const entity of entities) {
+                if (entity.msdyn_latitude == null || entity.msdyn_longitude == null) continue;
+
+                const lat = parseFloat(entity.msdyn_latitude.toString().replace(",", "."));
+                const lng = parseFloat(entity.msdyn_longitude.toString().replace(",", "."));
+
+                if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) continue;
+
+                const last = coords[coords.length - 1];
+                if (!last || last[0] !== lng || last[1] !== lat) {
+                    coords.push([lng, lat]);
                 }
-            });
+            }
 
-            this.updateMap(points);
+            if (entities.length === 0) {
+                await this.explainEmptyResult();
+            } else if (coords.length === 0) {
+                this.setStatus(`${entities.length} registros, pero ninguno con coordenadas válidas.`);
+            } else if (coords.length === 1) {
+                this.setStatus(`${entities.length} registros, pero todos en la misma posición: no hay línea que dibujar.`);
+            } else {
+                this.setStatus(`${entities.length} registros → ${coords.length} puntos en la ruta.`);
+            }
 
+            if (!this._isMapReady) {
+                this._pendingCoords = coords;
+            } else {
+                this.updateMap(coords);
+            }
         } catch (error) {
-            console.error("[SecuRutas] FATAL ERROR consultando tracking:", error);
-            const errorMsg = error instanceof Error ? error.message : JSON.stringify(error);
-            
-            this._dialogTitle = "Error en la Búsqueda (Dataverse)";
-            this._dialogContent = React.createElement('div', null,
-                React.createElement('p', null, "Ha fallado la consulta a la tabla msdyn_geolocationtracking."),
-                React.createElement('pre', { style: { backgroundColor: '#ffe5e5', padding: '10px', borderRadius: '4px', overflowX: 'auto', fontSize: '12px' } }, errorMsg)
-            );
-            this._showDialog = true;
-            this.renderHeader();
-
+            console.error("[SecuRutas] Error obteniendo tracking:", error);
+            this.setStatus("⚠ Error en la consulta: " + this.errMsg(error));
             this.updateMap([]);
+        } finally {
+            this._loading = false;
+            this.renderHeader();
         }
     }
 
-    private updateMap(points: GeoLocationPoint[] = []): void {
-        if (!this._map || !this._lineSource || !this._pointSource) return;
-
-        // Limpiamos fuentes independientes
-        this._lineSource.clear();
-        this._pointSource.clear();
-        if (this._hoverPopup) this._hoverPopup.close();
-
-        if (points.length === 0) {
-             this._map.setCamera({
-                center: [-3.7038, 40.4168],
-                zoom: 10
-            });
-            return;
-        }
-
-        // 1. Pintar la línea en su propio DataSource
-        if (points.length > 1) {
-            const coordinates: atlas.data.Position[] = points.map(point => [point.lng, point.lat]);
-            const route = new atlas.data.Feature(new atlas.data.LineString(coordinates));
-            this._lineSource.add(route);
-        }
-
-        // 2. Pintar los marcadores en su propio DataSource
-        const markers: atlas.data.Feature<atlas.data.Point, MarkerProperties>[] = [];
-
-        points.forEach((point, index) => {
-            let icon = 'pin-round-blue'; 
-            let title = 'Waypoint';
-
-            if (index === 0) {
-                icon = 'marker-blue';
-                title = 'Inicio';
-            } else if (index === points.length - 1) {
-                icon = 'marker-red';
-                title = 'Fin';
-            }
-
-            const timeString = point.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    private async explainEmptyResult(): Promise<void> {
+        try {
+            const queryOptions = "?$select=msdyn_date&$filter=_msdyn_userid_value eq " + this._selectedResource + "&$orderby=msdyn_date desc&$top=1";
+            const res = await this._webAPI.retrieveMultipleRecords("msdyn_geolocationtracking", queryOptions);
             
-            markers.push(new atlas.data.Feature(new atlas.data.Point([point.lng, point.lat]), {
-                icon: icon,
-                title: title,
-                tooltipInfo: `<strong>Hora:</strong> ${timeString}<br/><strong>Lat:</strong> ${point.lat.toFixed(5)}<br/><strong>Lng:</strong> ${point.lng.toFixed(5)}`
-            }));
-        });
+            if (res.entities.length === 0) {
+                this.setStatus("Sin registros para este recurso en ninguna fecha (¿es el usuario correcto?).");
+            } else {
+                const d = new Date(res.entities[0].msdyn_date as string);
+                this.setStatus(`Sin registros ese día. Último registro del recurso: ${d.toLocaleString()}.`);
+            }
+        } catch (e) {
+            this.setStatus("Sin registros para ese día.");
+        }
+    }
 
-        this._pointSource.add(markers);
+    private setStatus(message: string): void {
+        this._status = message;
+        console.log("[SecuRutas]", message);
+        this.renderHeader();
+    }
 
-        // 3. Ajustar la cámara para que englobe todos los puntos
-        const lats = points.map(p => p.lat);
-        const lngs = points.map(p => p.lng);
-        
-        const bounds = atlas.data.BoundingBox.fromEdges(
-            Math.min(...lngs),
-            Math.min(...lats),
-            Math.max(...lngs),
-            Math.max(...lats)
+    private errMsg(error: unknown): string {
+        if (error && typeof error === "object" && "message" in error) {
+            return String((error as { message: unknown }).message);
+        }
+        return String(error);
+    }
+
+    private renderHeader(): void {
+        const control = React.createElement(
+            "div",
+            { className: "modern-header-card" },
+            React.createElement(
+                "div",
+                { className: "modern-header-title" },
+                React.createElement("h2", null, "Seguimiento de Rutas")
+            ),
+            React.createElement(
+                "div",
+                { className: "modern-header-controls" },
+                React.createElement(DatePicker, {
+                    label: "Fecha",
+                    value: this._selectedDate,
+                    onSelectDate: (date: Date | null | undefined) => {
+                        if (date) {
+                            this._selectedDate = date;
+                            this.renderHeader();
+                        }
+                    },
+                    styles: { root: { width: 160 } }
+                }),
+                React.createElement(ComboBox, {
+                    label: "Recurso Técnico",
+                    selectedKey: this._selectedResource,
+                    allowFreeform: true,
+                    autoComplete: "on",
+                    onChange: (event: React.FormEvent<IComboBox>, option?: IComboBoxOption) => {
+                        if (option) {
+                            this._selectedResource = option.key as string;
+                            this.renderHeader();
+                        }
+                    },
+                    options: this._resources,
+                    styles: { root: { width: 320 } }
+                }),
+                React.createElement(IconButton, {
+                    iconProps: { iconName: "Search" },
+                    title: "Buscar",
+                    disabled: this._loading,
+                    onClick: () => { void this.fetchTrackingData(); },
+                    className: "modern-search-button"
+                })
+            ),
+            this._status
+                ? React.createElement(
+                    "div",
+                    { style: { marginTop: 6, fontSize: 12, color: "#605e5c" } },
+                    this._status
+                )
+                : null,
+            this._mapError
+                ? React.createElement(
+                    "div",
+                    { style: { marginTop: 2, fontSize: 12, color: "#a4262c" } },
+                    this._mapError
+                )
+                : null
         );
 
-        this._map.setCamera({
-            bounds: bounds,
-            padding: 50 
-        });
+        if (!this._root) {
+            this._root = createRoot(this._headerContainer);
+        }
+        this._root.render(control);
     }
 
     public updateView(context: ComponentFramework.Context<IInputs>): void {
         this._context = context;
-        if (this._map) {
-             setTimeout(() => {
-                this._map.events.invoke('resize', null);
-            }, 100);
-        }
+        this.safeResize();
     }
 
-    public getOutputs(): IOutputs {
-        return {};
-    }
+    public getOutputs(): IOutputs { return {}; }
 
     public destroy(): void {
-        if (this._root) {
-            this._root.unmount();
-        }
-        if (this._map) {
-            this._map.dispose();
-        }
+        if (this._resizeObserver) this._resizeObserver.disconnect();
+        if (this._root) this._root.unmount();
+        if (this._map) this._map.dispose();
+        if (this._routeSvg) this._routeSvg.remove();
     }
 }
