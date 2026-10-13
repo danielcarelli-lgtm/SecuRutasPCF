@@ -2,7 +2,7 @@ import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import * as atlas from "azure-maps-control";
 import * as React from "react";
 import { createRoot, Root } from "react-dom/client";
-import { ComboBox, IComboBoxOption, IComboBox, DatePicker, IconButton, initializeIcons } from '@fluentui/react';
+import { ComboBox, IComboBoxOption, IComboBox, DatePicker, Dropdown, IDropdownOption, IconButton, initializeIcons } from '@fluentui/react';
 
 initializeIcons(undefined, { disableWarnings: true });
 
@@ -17,6 +17,8 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
     private _routeSvg: SVGSVGElement | undefined;
     private _routeHalo: SVGPolylineElement | undefined;
     private _routeLine: SVGPolylineElement | undefined;
+    private _startMarker: SVGGElement | undefined;
+    private _endMarker: SVGGElement | undefined;
     private _routePositions: atlas.data.Position[] = [];
     private _isMapReady = false;
     private _resizeObserver: ResizeObserver | undefined;
@@ -24,6 +26,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private _selectedDate: Date = new Date();
     private _selectedResource: string | undefined;
+    private _selectedMapStyle = "road";
     private _resources: IComboBoxOption[] = [];
 
     private _status = "";
@@ -32,7 +35,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private _webAPI: ComponentFramework.WebApi;
     private _root: Root;
-    private readonly _controlVersion = "v1.1.30";
+    private readonly _controlVersion = "v1.1.31";
 
     private readonly _pageSize = 5000;
     private readonly _maxPages = 20;
@@ -92,7 +95,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             view: "Auto",
             center: [-3.7038, 40.4168],
             zoom: 10,
-            style: "road"
+            style: this._selectedMapStyle
         });
         this._map = map;
 
@@ -107,21 +110,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             const ds = new atlas.source.DataSource();
             map.sources.add(ds);
             this._dataSource = ds;
-
-            map.layers.add(
-                new atlas.layer.SymbolLayer(ds, undefined, {
-                    filter: ["==", ["geometry-type"], "Point"],
-                    iconOptions: {
-                        image: ["coalesce", ["get", "icon"], "marker-blue"],
-                        allowOverlap: true,
-                        ignorePlacement: true
-                    },
-                    textOptions: {
-                        textField: ["get", "title"],
-                        offset: [0, 1.2]
-                    }
-                })
-            );
 
             this.createRouteOverlay();
             map.events.add("render", () => this.drawRoute());
@@ -165,27 +153,10 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             return;
         }
 
-        const features: atlas.data.Feature<atlas.data.Point, { icon: string; title: string }>[] = [];
-
-        coords.forEach((c, index) => {
-            let icon = "pin-round-blue";
-            let title = "";
-
-            if (index === 0) {
-                icon = "marker-blue";
-                title = "Inicio";
-            } else if (index === coords.length - 1) {
-                icon = "marker-red";
-                title = "Fin";
-            }
-
-            features.push(new atlas.data.Feature(
-                new atlas.data.Point([c[0], c[1]]),
-                { icon, title }
-            ));
-        });
-
-        ds.add(new atlas.data.FeatureCollection(features));
+        const waypoints = coords.slice(1, -1).map(coord =>
+            new atlas.data.Feature(new atlas.data.Point([coord[0], coord[1]]))
+        );
+        if (waypoints.length > 0) ds.add(waypoints);
         this.drawRoute();
 
         let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
@@ -236,19 +207,58 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         line.setAttribute("stroke-linejoin", "round");
         line.setAttribute("vector-effect", "non-scaling-stroke");
 
+        const startMarker = this.createEndpointMarker(svgNamespace, "#16834b", "start");
+        const endMarker = this.createEndpointMarker(svgNamespace, "#c43131", "end");
+
         svg.appendChild(halo);
         svg.appendChild(line);
+        svg.appendChild(startMarker);
+        svg.appendChild(endMarker);
         this._mapContainer.appendChild(svg);
         this._routeSvg = svg;
         this._routeHalo = halo;
         this._routeLine = line;
+        this._startMarker = startMarker;
+        this._endMarker = endMarker;
+    }
+
+    private createEndpointMarker(svgNamespace: string, color: string, kind: "start" | "end"): SVGGElement {
+        const group = document.createElementNS(svgNamespace, "g") as SVGGElement;
+        group.setAttribute("aria-hidden", "true");
+        group.style.filter = "drop-shadow(0 1px 2px rgba(0,0,0,0.45))";
+
+        const circle = document.createElementNS(svgNamespace, "circle");
+        circle.setAttribute("r", "13");
+        circle.setAttribute("fill", color);
+        circle.setAttribute("stroke", "#ffffff");
+        circle.setAttribute("stroke-width", "2");
+        group.appendChild(circle);
+
+        const icon = document.createElementNS(svgNamespace, "path");
+        icon.setAttribute("fill", "none");
+        icon.setAttribute("stroke", "#ffffff");
+        icon.setAttribute("stroke-width", "2");
+        icon.setAttribute("stroke-linecap", "round");
+        icon.setAttribute("stroke-linejoin", "round");
+        icon.setAttribute(
+            "d",
+            kind === "start"
+                ? "M -2 -6 L 6 0 L -2 6 Z"
+                : "M -3 7 L -3 -7 M -2 -6 L 5 -4 L -2 -1"
+        );
+        if (kind === "start") icon.setAttribute("fill", "#ffffff");
+        group.appendChild(icon);
+
+        return group;
     }
 
     private drawRoute(): void {
-        if (!this._map || !this._routeSvg || !this._routeHalo || !this._routeLine) return;
+        if (!this._map || !this._routeSvg || !this._routeHalo || !this._routeLine || !this._startMarker || !this._endMarker) return;
         if (this._routePositions.length < 2) {
             this._routeHalo.setAttribute("points", "");
             this._routeLine.setAttribute("points", "");
+            this._startMarker.setAttribute("display", "none");
+            this._endMarker.setAttribute("display", "none");
             return;
         }
 
@@ -258,6 +268,16 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         const path = pixels.map(pixel => `${pixel[0]},${pixel[1]}`).join(" ");
         this._routeHalo.setAttribute("points", path);
         this._routeLine.setAttribute("points", path);
+        this._startMarker.setAttribute("transform", `translate(${pixels[0][0]} ${pixels[0][1]})`);
+        this._endMarker.setAttribute("transform", `translate(${pixels[pixels.length - 1][0]} ${pixels[pixels.length - 1][1]})`);
+        this._startMarker.removeAttribute("display");
+        this._endMarker.removeAttribute("display");
+    }
+
+    private changeMapStyle(option?: IDropdownOption): void {
+        if (!option || !this._map) return;
+        this._selectedMapStyle = option.key as string;
+        this._map.setStyle({ style: this._selectedMapStyle });
     }
 
     private async loadResources(): Promise<void> {
@@ -427,6 +447,18 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                     },
                     options: this._resources,
                     styles: { root: { width: 320 } }
+                }),
+                React.createElement(Dropdown, {
+                    label: "Tipo de mapa",
+                    selectedKey: this._selectedMapStyle,
+                    options: [
+                        { key: "road", text: "Normal" },
+                        { key: "satellite_road_labels", text: "Satélite" }
+                    ],
+                    onChange: (event: React.FormEvent<HTMLDivElement>, option?: IDropdownOption) => {
+                        this.changeMapStyle(option);
+                    },
+                    styles: { root: { width: 180 } }
                 }),
                 React.createElement(IconButton, {
                     iconProps: { iconName: "Search" },
