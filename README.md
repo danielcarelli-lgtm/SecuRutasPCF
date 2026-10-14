@@ -1,44 +1,34 @@
 # SecuRutas
 
-SecuRutas es una herramienta pensada para controlar y supervisar la ruta de un recurso o personal técnico en un día determinado. Permite ver en un mapa el recorrido realizado, identificar el punto de inicio y el punto de finalización, y revisar rápidamente si la actividad se desarrolló como corresponde.
+SecuRutas permite consultar y revisar el recorrido registrado para una persona técnica en una fecha determinada. La ruta se presenta sobre un mapa y en una línea de tiempo para facilitar el seguimiento de los desplazamientos del día.
 
-## ¿Para qué sirve?
+## Qué puedes hacer
 
-Ayuda a las personas responsables de la operación a tener una visión clara del movimiento diario de cada recurso. Es útil para:
+- Elegir la fecha que quieres consultar.
+- Buscar el recorrido de una persona técnica.
+- Cambiar la vista del mapa entre **Normal**, **Callejero (OSM)** y **Satélite**.
+- Distinguir el inicio y el fin de la ruta mediante marcadores.
+- Ver los puntos registrados a lo largo del recorrido.
+- Consultar la hora y la geoposición de un punto al seleccionarlo o pasar el cursor sobre él.
+- Revisar la hora de inicio, la hora de fin y la duración total en la línea de tiempo.
+- Usar los puntos de la línea de tiempo para resaltar una ubicación y centrar el mapa en ella.
 
-- verificar que el personal estuvo en el lugar correcto,
-- revisar recorridos realizados en una fecha específica,
-- detectar desviaciones o cambios en la ruta,
-- apoyar la gestión diaria de actividades en terreno.
+## Cómo consultar una ruta
 
-## Funcionalidades principales
+1. Selecciona la fecha.
+2. Elige a la persona técnica en la lista de recursos.
+3. Escoge la vista de mapa que prefieras.
+4. Pulsa el botón de búsqueda.
+5. Revisa el recorrido en el mapa y utiliza la línea de tiempo para explorar sus puntos.
 
-- Selección de la fecha a revisar.
-- Búsqueda por recurso o personal técnico.
-- Visualización del recorrido en un mapa.
-- Identificación del inicio y fin del desplazamiento.
-- Consulta rápida de la ruta del día.
-- Presentación clara y directa para seguimiento operativo.
+Al pasar el cursor sobre un punto del mapa o de la línea de tiempo, se muestran sus detalles y se resalta su ubicación correspondiente. Al seleccionar un punto en la línea de tiempo, el mapa se centra en esa parte del recorrido.
 
-## ¿Cómo funciona?
+## Información disponible
 
-1. El usuario elige la fecha que desea revisar.
-2. Selecciona el recurso o personal correspondiente.
-3. Ejecuta la búsqueda de la ruta.
-4. El sistema muestra el recorrido en el mapa con los puntos más relevantes del desplazamiento.
-5. La persona puede analizar la ruta para confirmar el cumplimiento de la actividad.
+La línea de tiempo representa el avance del recorrido desde el **inicio (0 %)** hasta el **fin (100 %)**. Sus marcas muestran la hora y el porcentaje aproximado del recorrido asociado a cada punto. También indica la duración entre el primer y el último registro disponible.
 
-## Beneficios
+La información que se muestra depende de los registros de ubicación disponibles para la persona y la fecha elegidas. Si no hay puntos suficientes o no existen registros para esa consulta, SecuRutas lo indica en pantalla.
 
-- Ahorra tiempo en la revisión de recorridos.
-- Mejora la visibilidad del trabajo en campo.
-- Facilita la toma de decisiones con información clara.
-- Ayuda a mantener un control más ordenado y eficiente de las operaciones.
+## Para quién es
 
-## Usuarios principales
-
-SecuRutas está orientado a equipos de supervisión, coordinación operativa y seguimiento de personal en movimiento. También resulta útil para quienes necesitan conocer la ubicación real de una actividad en un momento concreto.
-
-## Objetivo
-
-Brindar una visión práctica y útil del recorrido diario, sin complicaciones, para que la operación pueda revisarse de manera rápida, ordenada y confiable.
+SecuRutas está pensado para personas que coordinan o supervisan equipos en terreno y necesitan revisar de forma clara los desplazamientos registrados durante una jornada.

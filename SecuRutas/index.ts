@@ -12,7 +12,6 @@ import {
     Dropdown,
     IDropdownOption,
     IconButton,
-    IStyle,
     initializeIcons
 } from "@fluentui/react";
 
@@ -85,7 +84,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private _webAPI: ComponentFramework.WebApi;
     private _root: Root;
-    private readonly _controlVersion = "v1.1.37";
+    private readonly _controlVersion = "v1.1.38";
 
     private readonly _pageSize = 5000;
     private readonly _maxPages = 20;
@@ -1041,15 +1040,34 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
     }
 
     private renderHeader(): void {
-        const unifiedLabelStyle: IStyle = {
-            padding: "0 0 4px 0",
+        const fieldColumnStyle: React.CSSProperties = {
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "flex-end",
             margin: 0,
-            fontSize: 12,
-            fontWeight: 600 as const,
+            padding: 0
+        };
+
+        const fieldLabelStyle: React.CSSProperties = {
+            fontSize: "12px",
+            fontWeight: 600,
             lineHeight: "16px",
-            height: 20,
-            boxSizing: "border-box" as const,
-            color: "#323130"
+            height: "16px",
+            marginBottom: "4px",
+            color: "#323130",
+            whiteSpace: "nowrap",
+            userSelect: "none"
+        };
+
+        const emptyLabelSpacerStyle: React.CSSProperties = {
+            height: "16px",
+            marginBottom: "4px"
+        };
+
+        const controlSlotStyle: React.CSSProperties = {
+            height: "32px",
+            display: "flex",
+            alignItems: "center"
         };
 
         const control = React.createElement(
@@ -1076,138 +1094,196 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                         paddingRight: "120px",
                         display: "flex",
                         flexDirection: "row",
-                        alignItems: "center",
+                        alignItems: "flex-end",
                         justifyContent: "flex-start",
                         flexWrap: "wrap",
-                        gap: "14px"
+                        gap: "12px"
                     }
                 },
+                // Columna 1: Título alineado con las cajas de 32px
                 React.createElement(
                     "div",
-                    {
-                        className: "modern-header-title",
-                        style: {
-                            margin: 0,
-                            padding: "0 14px 0 0",
-                            borderBottom: "none",
-                            borderRight: "1px solid #edebe9",
-                            display: "flex",
-                            alignItems: "center",
-                            height: "38px"
-                        }
-                    },
+                    { style: fieldColumnStyle },
+                    React.createElement("div", { style: emptyLabelSpacerStyle }),
                     React.createElement(
-                        "h2",
+                        "div",
                         {
                             style: {
-                                margin: 0,
-                                fontSize: "15px",
-                                fontWeight: 600,
-                                color: "#004b8b",
-                                whiteSpace: "nowrap"
+                                height: "32px",
+                                display: "flex",
+                                alignItems: "center",
+                                paddingRight: "14px",
+                                borderRight: "1px solid #edebe9"
                             }
                         },
-                        "Seguimiento de Rutas"
+                        React.createElement(
+                            "span",
+                            {
+                                style: {
+                                    margin: 0,
+                                    fontSize: "15px",
+                                    fontWeight: 600,
+                                    color: "#004b8b",
+                                    whiteSpace: "nowrap"
+                                }
+                            },
+                            "Seguimiento de Rutas"
+                        )
                     )
                 ),
+                // Columna 2: Fecha
                 React.createElement(
                     "div",
-                    {
-                        className: "modern-header-controls",
-                        style: {
-                            display: "flex",
-                            flexDirection: "row",
-                            alignItems: "flex-end",
-                            flexWrap: "wrap",
-                            gap: "12px",
-                            margin: 0,
-                            padding: 0
-                        }
-                    },
-                    React.createElement(DatePicker, {
-                        label: "Fecha",
-                        value: this._selectedDate,
-                        firstDayOfWeek: DayOfWeek.Monday,
-                        strings: SPANISH_DATEPICKER_STRINGS,
-                        formatDate: this.formatSelectedDate,
-                        onSelectDate: (date: Date | null | undefined) => {
-                            if (date) {
-                                this._selectedDate = date;
-                                this.renderHeader();
-                            }
-                        },
-                        styles: {
-                            root: { width: 165, margin: 0 },
-                            textField: {
-                                root: { margin: 0 },
-                                fieldGroup: { height: 32, minHeight: 32 },
-                                subComponentStyles: {
-                                    label: { root: unifiedLabelStyle }
+                    { style: fieldColumnStyle },
+                    React.createElement("div", { style: fieldLabelStyle }, "Fecha"),
+                    React.createElement(
+                        "div",
+                        { style: controlSlotStyle },
+                        React.createElement(DatePicker, {
+                            value: this._selectedDate,
+                            firstDayOfWeek: DayOfWeek.Monday,
+                            strings: SPANISH_DATEPICKER_STRINGS,
+                            formatDate: this.formatSelectedDate,
+                            onSelectDate: (date: Date | null | undefined) => {
+                                if (date) {
+                                    this._selectedDate = date;
+                                    this.renderHeader();
+                                }
+                            },
+                            styles: {
+                                root: { width: 165, height: 32, margin: 0, padding: 0 },
+                                textField: {
+                                    root: { height: 32, margin: 0, padding: 0 },
+                                    wrapper: { height: 32, margin: 0, padding: 0 },
+                                    fieldGroup: { height: 32, minHeight: 32, margin: 0, boxSizing: "border-box" },
+                                    field: { height: 30, lineHeight: "30px" }
+                                },
+                                icon: {
+                                    top: 0,
+                                    bottom: 0,
+                                    height: 32,
+                                    lineHeight: "32px",
+                                    padding: "0 8px"
                                 }
                             }
-                        }
-                    }),
-                    React.createElement(ComboBox, {
-                        label: "Recurso Técnico",
-                        selectedKey: this._selectedResource,
-                        allowFreeform: true,
-                        autoComplete: "on",
-                        onChange: (event: React.FormEvent<IComboBox>, option?: IComboBoxOption) => {
-                            if (option) {
-                                this._selectedResource = option.key as string;
-                                this.renderHeader();
+                        })
+                    )
+                ),
+                // Columna 3: Recurso Técnico
+                React.createElement(
+                    "div",
+                    { style: fieldColumnStyle },
+                    React.createElement("div", { style: fieldLabelStyle }, "Recurso Técnico"),
+                    React.createElement(
+                        "div",
+                        { style: controlSlotStyle },
+                        React.createElement(ComboBox, {
+                            selectedKey: this._selectedResource,
+                            allowFreeform: true,
+                            autoComplete: "on",
+                            onChange: (event: React.FormEvent<IComboBox>, option?: IComboBoxOption) => {
+                                if (option) {
+                                    this._selectedResource = option.key as string;
+                                    this.renderHeader();
+                                }
+                            },
+                            options: this._resources,
+                            styles: {
+                                container: { width: 250, height: 32, margin: 0, padding: 0 },
+                                root: { height: 32, minHeight: 32, margin: 0, boxSizing: "border-box" },
+                                input: { height: 30, lineHeight: "30px" }
                             }
-                        },
-                        options: this._resources,
-                        styles: {
-                            container: { width: 250, margin: 0 },
-                            root: { height: 32, minHeight: 32 },
-                            label: unifiedLabelStyle
-                        }
-                    }),
-                    React.createElement(Dropdown, {
-                        label: "Tipo de mapa",
-                        selectedKey: this._selectedMapStyle,
-                        options: [
-                            { key: "road", text: "Normal (Azure)" },
-                            { key: "osm", text: "Callejero (OSM)" },
-                            { key: "satellite_road_labels", text: "Satélite" }
-                        ],
-                        onChange: (event: React.FormEvent<HTMLDivElement>, option?: IDropdownOption) => {
-                            this.changeMapStyle(option);
-                        },
-                        styles: {
-                            root: { width: 160, margin: 0 },
-                            title: { height: 32, lineHeight: "30px" },
-                            label: unifiedLabelStyle
-                        }
-                    }),
-                    React.createElement(IconButton, {
-                        iconProps: { iconName: "Search" },
-                        title: "Buscar",
-                        disabled: this._loading,
-                        onClick: () => { void this.fetchTrackingData(); },
-                        className: "modern-search-button",
-                        styles: {
-                            root: {
-                                width: 32,
-                                height: 32,
-                                margin: 0,
-                                padding: 0,
-                                borderRadius: "50%"
+                        })
+                    )
+                ),
+                // Columna 4: Tipo de mapa
+                React.createElement(
+                    "div",
+                    { style: fieldColumnStyle },
+                    React.createElement("div", { style: fieldLabelStyle }, "Tipo de mapa"),
+                    React.createElement(
+                        "div",
+                        { style: controlSlotStyle },
+                        React.createElement(Dropdown, {
+                            selectedKey: this._selectedMapStyle,
+                            options: [
+                                { key: "road", text: "Normal (Azure)" },
+                                { key: "osm", text: "Callejero (OSM)" },
+                                { key: "satellite_road_labels", text: "Satélite" }
+                            ],
+                            onChange: (event: React.FormEvent<HTMLDivElement>, option?: IDropdownOption) => {
+                                this.changeMapStyle(option);
+                            },
+                            styles: {
+                                root: { width: 160, height: 32, margin: 0, padding: 0 },
+                                dropdown: { width: 160, height: 32, margin: 0, boxSizing: "border-box" },
+                                title: { height: 32, lineHeight: "30px", margin: 0, boxSizing: "border-box" },
+                                caretDownWrapper: { height: 32, lineHeight: "30px" }
                             }
-                        }
-                    }),
-                    this._status || this._mapError
-                        ? React.createElement(
+                        })
+                    )
+                ),
+                // Columna 5: Botón Buscar (32x32 exactos, alineado con los inputs)
+                React.createElement(
+                    "div",
+                    { style: fieldColumnStyle },
+                    React.createElement("div", { style: emptyLabelSpacerStyle }),
+                    React.createElement(
+                        "div",
+                        { style: controlSlotStyle },
+                        React.createElement(IconButton, {
+                            iconProps: { iconName: "Search" },
+                            title: "Buscar",
+                            disabled: this._loading,
+                            onClick: () => { void this.fetchTrackingData(); },
+                            styles: {
+                                root: {
+                                    width: 32,
+                                    height: 32,
+                                    minWidth: 32,
+                                    minHeight: 32,
+                                    margin: 0,
+                                    padding: 0,
+                                    borderRadius: "50%",
+                                    backgroundColor: "#004b8b",
+                                    color: "#ffffff",
+                                    boxShadow: "0 2px 4px rgba(0, 75, 139, 0.25)"
+                                },
+                                rootHovered: {
+                                    backgroundColor: "#00396b",
+                                    color: "#ffffff"
+                                },
+                                rootPressed: {
+                                    backgroundColor: "#00284d",
+                                    color: "#ffffff"
+                                },
+                                rootDisabled: {
+                                    backgroundColor: "#c8c6c4",
+                                    color: "#ffffff"
+                                },
+                                icon: {
+                                    fontSize: 14,
+                                    color: "#ffffff"
+                                }
+                            }
+                        })
+                    )
+                ),
+                // Columna 6: Estado / Error centrado verticalmente en los 32px
+                this._status || this._mapError
+                    ? React.createElement(
+                        "div",
+                        { style: fieldColumnStyle },
+                        React.createElement("div", { style: emptyLabelSpacerStyle }),
+                        React.createElement(
                             "div",
                             {
                                 style: {
+                                    height: "32px",
                                     display: "flex",
                                     flexDirection: "column",
                                     justifyContent: "center",
-                                    minHeight: 32,
-                                    paddingLeft: 4
+                                    paddingLeft: "4px"
                                 }
                             },
                             this._status
@@ -1225,8 +1301,8 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                                 )
                                 : null
                         )
-                        : null
-                )
+                    )
+                    : null
             ),
             this.renderTimelineBar()
         );
