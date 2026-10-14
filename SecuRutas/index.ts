@@ -2,9 +2,15 @@ import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import * as atlas from "azure-maps-control";
 import * as React from "react";
 import { createRoot, Root } from "react-dom/client";
-import { ComboBox, IComboBoxOption, IComboBox, DatePicker, Dropdown, IDropdownOption, IconButton, initializeIcons } from '@fluentui/react';
+import { ComboBox, IComboBoxOption, IComboBox, DatePicker, Dropdown, IDropdownOption, IconButton, initializeIcons } from "@fluentui/react";
 
 initializeIcons(undefined, { disableWarnings: true });
+
+interface RoutePoint {
+    lng: number;
+    lat: number;
+    timestamp?: string;
+}
 
 export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IOutputs> {
     private _container: HTMLDivElement;
@@ -13,16 +19,23 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
     private _headerContainer: HTMLDivElement;
 
     private _map: atlas.Map | undefined;
-    private _dataSource: atlas.source.DataSource | undefined;
+    private _satelliteTileLayer: atlas.layer.TileLayer | undefined;
+    private _baseTileLayer: atlas.layer.TileLayer | undefined;
+
     private _routeSvg: SVGSVGElement | undefined;
     private _routeHalo: SVGPolylineElement | undefined;
     private _routeLine: SVGPolylineElement | undefined;
+    private _waypointsGroup: SVGGElement | undefined;
+    private _waypointCircles: SVGCircleElement[] = [];
     private _startMarker: SVGGElement | undefined;
     private _endMarker: SVGGElement | undefined;
+    private _tooltipEl: HTMLDivElement | undefined;
+
+    private _routePoints: RoutePoint[] = [];
     private _routePositions: atlas.data.Position[] = [];
     private _isMapReady = false;
     private _resizeObserver: ResizeObserver | undefined;
-    private _pendingCoords: number[][] | undefined;
+    private _pendingPoints: RoutePoint[] | undefined;
 
     private _selectedDate: Date = new Date();
     private _selectedResource: string | undefined;
@@ -35,7 +48,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private _webAPI: ComponentFramework.WebApi;
     private _root: Root;
-    private readonly _controlVersion = "v1.1.31";
+    private readonly _controlVersion = "v1.1.33";
 
     private readonly _pageSize = 5000;
     private readonly _maxPages = 20;
@@ -93,32 +106,36 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             },
             domain: "eu.atlas.microsoft.com",
             view: "Auto",
+            language: "es-ES",
             center: [-3.7038, 40.4168],
             zoom: 10,
-            style: this._selectedMapStyle
+            style: "blank"
         });
         this._map = map;
 
         map.events.add("error", (e: unknown) => {
             console.error("[SecuRutas] Error del mapa:", e);
             const inner = (e as { error?: { message?: string } })?.error;
-            this._mapError = "⚠ Azure Maps: " + (inner?.message ?? this.errMsg(e));
+            const msg = inner?.message ?? this.errMsg(e);
+            // Ignorar errores internos de bing-mvt si ocurrieran
+            if (msg.indexOf("bing-mvt") >= 0) return;
+            this._mapError = "⚠ Azure Maps: " + msg;
             this.renderHeader();
         });
 
         map.events.add("ready", () => {
-            const ds = new atlas.source.DataSource();
-            map.sources.add(ds);
-            this._dataSource = ds;
-
+            this.setupRasterLayers(map, azureMapsKey);
             this.createRouteOverlay();
+
             map.events.add("render", () => this.drawRoute());
+            map.events.add("movestart", () => this.hideTooltip());
+
             this._isMapReady = true;
             this.safeResize();
 
-            if (this._pendingCoords) {
-                const pending = this._pendingCoords;
-                this._pendingCoords = undefined;
+            if (this._pendingPoints) {
+                const pending = this._pendingPoints;
+                this._pendingPoints = undefined;
                 this.updateMap(pending);
             }
         });
@@ -126,6 +143,65 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         if (typeof ResizeObserver !== "undefined") {
             this._resizeObserver = new ResizeObserver(() => this.safeResize());
             this._resizeObserver.observe(this._mapContainer);
+        }
+    }
+
+    private getAzureTileUrl(tilesetId: string, azureMapsKey: string): string {
+        return "https://eu.atlas.microsoft.com/map/tile?api-version=2.1" +
+            "&tilesetId=" + tilesetId +
+            "&zoom={z}&x={x}&y={y}&tileSize=256&language=es-ES&view=Auto" +
+            "&subscription-key=" + encodeURIComponent(azureMapsKey);
+    }
+
+    private setupRasterLayers(map: atlas.Map, azureMapsKey: string): void {
+        // Capa base de imágenes de satélite (solo visible en modo satélite)
+        this._satelliteTileLayer = new atlas.layer.TileLayer({
+            tileUrl: this.getAzureTileUrl("microsoft.imagery", azureMapsKey),
+            tileSize: 256,
+            maxSourceZoom: 18,
+            visible: false
+        });
+
+        // Capa principal con nombres de calles, sentidos, parques y POIs renderizados
+        this._baseTileLayer = new atlas.layer.TileLayer({
+            tileUrl: this.getAzureTileUrl("microsoft.base.road", azureMapsKey),
+            tileSize: 256,
+            maxSourceZoom: 18,
+            visible: true
+        });
+
+        map.layers.add([this._satelliteTileLayer, this._baseTileLayer]);
+        this.applyMapStyleLayers();
+    }
+
+    private applyMapStyleLayers(): void {
+        const azureMapsKey = this._context.parameters.azureMapsKey.raw;
+        if (!azureMapsKey || !this._baseTileLayer || !this._satelliteTileLayer) return;
+
+        if (this._selectedMapStyle === "satellite_road_labels") {
+            this._satelliteTileLayer.setOptions({ visible: true });
+            this._baseTileLayer.setOptions({
+                tileUrl: this.getAzureTileUrl("microsoft.base.hybrid.road", azureMapsKey),
+                tileSize: 256,
+                maxSourceZoom: 18,
+                visible: true
+            });
+        } else if (this._selectedMapStyle === "osm") {
+            this._satelliteTileLayer.setOptions({ visible: false });
+            this._baseTileLayer.setOptions({
+                tileUrl: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                tileSize: 256,
+                maxSourceZoom: 19,
+                visible: true
+            });
+        } else {
+            this._satelliteTileLayer.setOptions({ visible: false });
+            this._baseTileLayer.setOptions({
+                tileUrl: this.getAzureTileUrl("microsoft.base.road", azureMapsKey),
+                tileSize: 256,
+                maxSourceZoom: 18,
+                visible: true
+            });
         }
     }
 
@@ -138,33 +214,27 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         }
     }
 
-    private updateMap(coords: number[][]): void {
-        if (!this._isMapReady || !this._dataSource || !this._map) {
-            this._pendingCoords = coords;
+    private updateMap(points: RoutePoint[]): void {
+        if (!this._isMapReady || !this._map) {
+            this._pendingPoints = points;
             return;
         }
 
-        const ds = this._dataSource;
-        ds.clear();
-        this._routePositions = coords.map(coord => [coord[0], coord[1]]);
+        this.hideTooltip();
+        this._routePoints = points;
+        this._routePositions = points.map(p => [p.lng, p.lat]);
 
-        if (coords.length === 0) {
-            this.drawRoute();
-            return;
-        }
-
-        const waypoints = coords.slice(1, -1).map(coord =>
-            new atlas.data.Feature(new atlas.data.Point([coord[0], coord[1]]))
-        );
-        if (waypoints.length > 0) ds.add(waypoints);
+        this.rebuildWaypointNodes();
         this.drawRoute();
 
+        if (points.length === 0) return;
+
         let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-        for (const c of coords) {
-            if (c[0] < minLng) minLng = c[0];
-            if (c[0] > maxLng) maxLng = c[0];
-            if (c[1] < minLat) minLat = c[1];
-            if (c[1] > maxLat) maxLat = c[1];
+        for (const p of points) {
+            if (p.lng < minLng) minLng = p.lng;
+            if (p.lng > maxLng) maxLng = p.lng;
+            if (p.lat < minLat) minLat = p.lat;
+            if (p.lat > maxLat) maxLat = p.lat;
         }
 
         this.safeResize();
@@ -175,7 +245,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                 padding: 50
             });
         } else {
-            this._map.setCamera({ center: [coords[0][0], coords[0][1]], zoom: 15 });
+            this._map.setCamera({ center: [points[0].lng, points[0].lat], zoom: 15 });
         }
     }
 
@@ -189,7 +259,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         svg.style.height = "100%";
         svg.style.overflow = "hidden";
         svg.style.pointerEvents = "none";
-        svg.style.zIndex = "1";
+        svg.style.zIndex = "2";
 
         const halo = document.createElementNS(svgNamespace, "polyline");
         halo.setAttribute("fill", "none");
@@ -207,25 +277,68 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         line.setAttribute("stroke-linejoin", "round");
         line.setAttribute("vector-effect", "non-scaling-stroke");
 
+        const waypointsGroup = document.createElementNS(svgNamespace, "g") as SVGGElement;
+
         const startMarker = this.createEndpointMarker(svgNamespace, "#16834b", "start");
         const endMarker = this.createEndpointMarker(svgNamespace, "#c43131", "end");
 
+        // Eventos de tooltip para Inicio y Fin
+        startMarker.addEventListener("mouseenter", () => {
+            if (this._routePoints.length > 0) {
+                this.showTooltip(this._routePoints[0], 0, this._routePoints.length);
+            }
+        });
+        startMarker.addEventListener("mouseleave", () => this.hideTooltip());
+
+        endMarker.addEventListener("mouseenter", () => {
+            if (this._routePoints.length > 1) {
+                const lastIdx = this._routePoints.length - 1;
+                this.showTooltip(this._routePoints[lastIdx], lastIdx, this._routePoints.length);
+            }
+        });
+        endMarker.addEventListener("mouseleave", () => this.hideTooltip());
+
         svg.appendChild(halo);
         svg.appendChild(line);
+        svg.appendChild(waypointsGroup);
         svg.appendChild(startMarker);
         svg.appendChild(endMarker);
+
+        // Tooltip flotante HTML
+        const tooltip = document.createElement("div");
+        tooltip.style.position = "absolute";
+        tooltip.style.display = "none";
+        tooltip.style.pointerEvents = "none";
+        tooltip.style.zIndex = "10";
+        tooltip.style.backgroundColor = "rgba(255, 255, 255, 0.97)";
+        tooltip.style.color = "#201f1e";
+        tooltip.style.padding = "8px 10px";
+        tooltip.style.borderRadius = "6px";
+        tooltip.style.boxShadow = "0 2px 8px rgba(0, 0, 0, 0.28)";
+        tooltip.style.border = "1px solid #edebe9";
+        tooltip.style.fontFamily = "'Segoe UI', sans-serif";
+        tooltip.style.fontSize = "12px";
+        tooltip.style.lineHeight = "1.4";
+        tooltip.style.whiteSpace = "nowrap";
+
         this._mapContainer.appendChild(svg);
+        this._mapContainer.appendChild(tooltip);
+
         this._routeSvg = svg;
         this._routeHalo = halo;
         this._routeLine = line;
+        this._waypointsGroup = waypointsGroup;
         this._startMarker = startMarker;
         this._endMarker = endMarker;
+        this._tooltipEl = tooltip;
     }
 
     private createEndpointMarker(svgNamespace: string, color: string, kind: "start" | "end"): SVGGElement {
         const group = document.createElementNS(svgNamespace, "g") as SVGGElement;
         group.setAttribute("aria-hidden", "true");
         group.style.filter = "drop-shadow(0 1px 2px rgba(0,0,0,0.45))";
+        group.style.pointerEvents = "all";
+        group.style.cursor = "pointer";
 
         const circle = document.createElementNS(svgNamespace, "circle");
         circle.setAttribute("r", "13");
@@ -252,32 +365,153 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         return group;
     }
 
+    private rebuildWaypointNodes(): void {
+        if (!this._waypointsGroup) return;
+
+        while (this._waypointsGroup.firstChild) {
+            this._waypointsGroup.removeChild(this._waypointsGroup.firstChild);
+        }
+        this._waypointCircles = [];
+
+        if (this._routePoints.length <= 2) return;
+
+        const svgNamespace = "http://www.w3.org/2000/svg";
+        const total = this._routePoints.length;
+
+        for (let i = 1; i < total - 1; i++) {
+            const point = this._routePoints[i];
+            const circle = document.createElementNS(svgNamespace, "circle");
+            circle.setAttribute("r", "4.5");
+            circle.setAttribute("fill", "#ffffff");
+            circle.setAttribute("stroke", "#004b8b");
+            circle.setAttribute("stroke-width", "2");
+            circle.style.pointerEvents = "all";
+            circle.style.cursor = "pointer";
+            circle.style.filter = "drop-shadow(0 1px 1px rgba(0,0,0,0.3))";
+
+            circle.addEventListener("mouseenter", () => {
+                circle.setAttribute("r", "7");
+                circle.setAttribute("fill", "#e8f2fc");
+                this.showTooltip(point, i, total);
+            });
+
+            circle.addEventListener("mouseleave", () => {
+                circle.setAttribute("r", "4.5");
+                circle.setAttribute("fill", "#ffffff");
+                this.hideTooltip();
+            });
+
+            this._waypointsGroup.appendChild(circle);
+            this._waypointCircles.push(circle);
+        }
+    }
+
+    private showTooltip(point: RoutePoint, index: number, total: number): void {
+        if (!this._map || !this._tooltipEl) return;
+
+        const pixels = this._map.positionsToPixels([[point.lng, point.lat]]);
+        if (!pixels || pixels.length === 0) return;
+
+        const px = pixels[0];
+        if (!Number.isFinite(px[0]) || !Number.isFinite(px[1])) return;
+
+        let label = `Waypoint #${index}`;
+        let badgeColor = "#004b8b";
+        if (index === 0) {
+            label = "Inicio de ruta";
+            badgeColor = "#16834b";
+        } else if (index === total - 1) {
+            label = `Fin de ruta (#${index})`;
+            badgeColor = "#c43131";
+        }
+
+        const timeStr = this.formatTimestamp(point.timestamp);
+        const coordsStr = `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+
+        this._tooltipEl.innerHTML =
+            `<div style="font-weight: 600; color: ${badgeColor}; margin-bottom: 3px;">${label}</div>` +
+            `<div><strong>Hora:</strong> ${timeStr}</div>` +
+            `<div><strong>Geoposición:</strong> ${coordsStr}</div>`;
+
+        this._tooltipEl.style.left = `${px[0]}px`;
+        this._tooltipEl.style.top = `${px[1]}px`;
+        this._tooltipEl.style.transform = px[1] < 85
+            ? "translate(-50%, 16px)"
+            : "translate(-50%, calc(-100% - 16px))";
+        this._tooltipEl.style.display = "block";
+    }
+
+    private hideTooltip(): void {
+        if (this._tooltipEl) {
+            this._tooltipEl.style.display = "none";
+        }
+    }
+
+    private formatTimestamp(isoString?: string): string {
+        if (!isoString) return "Sin hora";
+        const d = new Date(isoString);
+        if (isNaN(d.getTime())) return "Sin hora";
+        return d.toLocaleTimeString("es-ES", {
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit"
+        });
+    }
+
     private drawRoute(): void {
         if (!this._map || !this._routeSvg || !this._routeHalo || !this._routeLine || !this._startMarker || !this._endMarker) return;
-        if (this._routePositions.length < 2) {
+
+        if (this._routePositions.length === 0) {
             this._routeHalo.setAttribute("points", "");
             this._routeLine.setAttribute("points", "");
             this._startMarker.setAttribute("display", "none");
             this._endMarker.setAttribute("display", "none");
+            for (const c of this._waypointCircles) {
+                c.setAttribute("display", "none");
+            }
             return;
         }
 
         const pixels = this._map.positionsToPixels(this._routePositions);
         if (pixels.some(pixel => !Number.isFinite(pixel[0]) || !Number.isFinite(pixel[1]))) return;
 
+        if (this._routePositions.length === 1) {
+            this._routeHalo.setAttribute("points", "");
+            this._routeLine.setAttribute("points", "");
+            this._startMarker.setAttribute("transform", `translate(${pixels[0][0]} ${pixels[0][1]})`);
+            this._startMarker.removeAttribute("display");
+            this._endMarker.setAttribute("display", "none");
+            return;
+        }
+
         const path = pixels.map(pixel => `${pixel[0]},${pixel[1]}`).join(" ");
         this._routeHalo.setAttribute("points", path);
         this._routeLine.setAttribute("points", path);
+
+        for (let i = 0; i < this._waypointCircles.length; i++) {
+            const p = pixels[i + 1];
+            const circle = this._waypointCircles[i];
+            if (p) {
+                circle.setAttribute("cx", String(p[0]));
+                circle.setAttribute("cy", String(p[1]));
+                circle.removeAttribute("display");
+            } else {
+                circle.setAttribute("display", "none");
+            }
+        }
+
+        const lastPixel = pixels[pixels.length - 1];
         this._startMarker.setAttribute("transform", `translate(${pixels[0][0]} ${pixels[0][1]})`);
-        this._endMarker.setAttribute("transform", `translate(${pixels[pixels.length - 1][0]} ${pixels[pixels.length - 1][1]})`);
+        this._endMarker.setAttribute("transform", `translate(${lastPixel[0]} ${lastPixel[1]})`);
         this._startMarker.removeAttribute("display");
         this._endMarker.removeAttribute("display");
     }
 
     private changeMapStyle(option?: IDropdownOption): void {
-        if (!option || !this._map) return;
+        if (!option) return;
         this._selectedMapStyle = option.key as string;
-        this._map.setStyle({ style: this._selectedMapStyle });
+        this.applyMapStyleLayers();
+        this.renderHeader();
     }
 
     private async loadResources(): Promise<void> {
@@ -342,7 +576,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
             const entities = await this.fetchAll("msdyn_geolocationtracking", options);
 
-            const coords: number[][] = [];
+            const points: RoutePoint[] = [];
             for (const entity of entities) {
                 if (entity.msdyn_latitude == null || entity.msdyn_longitude == null) continue;
 
@@ -351,26 +585,30 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
                 if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) continue;
 
-                const last = coords[coords.length - 1];
-                if (!last || last[0] !== lng || last[1] !== lat) {
-                    coords.push([lng, lat]);
+                const last = points[points.length - 1];
+                if (!last || last.lng !== lng || last.lat !== lat) {
+                    points.push({
+                        lng,
+                        lat,
+                        timestamp: entity.msdyn_date as string | undefined
+                    });
                 }
             }
 
             if (entities.length === 0) {
                 await this.explainEmptyResult();
-            } else if (coords.length === 0) {
+            } else if (points.length === 0) {
                 this.setStatus(`${entities.length} registros, pero ninguno con coordenadas válidas.`);
-            } else if (coords.length === 1) {
-                this.setStatus(`${entities.length} registros, pero todos en la misma posición: no hay línea que dibujar.`);
+            } else if (points.length === 1) {
+                this.setStatus(`${entities.length} registros, pero todos en la misma posición.`);
             } else {
-                this.setStatus(`${entities.length} registros → ${coords.length} puntos en la ruta.`);
+                this.setStatus(`${entities.length} registros → ${points.length} puntos en la ruta.`);
             }
 
             if (!this._isMapReady) {
-                this._pendingCoords = coords;
+                this._pendingPoints = points;
             } else {
-                this.updateMap(coords);
+                this.updateMap(points);
             }
         } catch (error) {
             console.error("[SecuRutas] Error obteniendo tracking:", error);
@@ -386,7 +624,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         try {
             const queryOptions = "?$select=msdyn_date&$filter=_msdyn_userid_value eq " + this._selectedResource + "&$orderby=msdyn_date desc&$top=1";
             const res = await this._webAPI.retrieveMultipleRecords("msdyn_geolocationtracking", queryOptions);
-            
+
             if (res.entities.length === 0) {
                 this.setStatus("Sin registros para este recurso en ninguna fecha (¿es el usuario correcto?).");
             } else {
@@ -452,7 +690,8 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                     label: "Tipo de mapa",
                     selectedKey: this._selectedMapStyle,
                     options: [
-                        { key: "road", text: "Normal" },
+                        { key: "road", text: "Normal (Azure)" },
+                        { key: "osm", text: "Callejero (OSM)" },
                         { key: "satellite_road_labels", text: "Satélite" }
                     ],
                     onChange: (event: React.FormEvent<HTMLDivElement>, option?: IDropdownOption) => {
@@ -502,5 +741,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         if (this._root) this._root.unmount();
         if (this._map) this._map.dispose();
         if (this._routeSvg) this._routeSvg.remove();
+        if (this._tooltipEl) this._tooltipEl.remove();
     }
 }
