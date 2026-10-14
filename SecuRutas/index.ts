@@ -2,7 +2,18 @@ import { IInputs, IOutputs } from "./generated/ManifestTypes";
 import * as atlas from "azure-maps-control";
 import * as React from "react";
 import { createRoot, Root } from "react-dom/client";
-import { ComboBox, IComboBoxOption, IComboBox, DatePicker, Dropdown, IDropdownOption, IconButton, initializeIcons } from "@fluentui/react";
+import {
+    ComboBox,
+    IComboBoxOption,
+    IComboBox,
+    DatePicker,
+    DayOfWeek,
+    IDatePickerStrings,
+    Dropdown,
+    IDropdownOption,
+    IconButton,
+    initializeIcons
+} from "@fluentui/react";
 
 initializeIcons(undefined, { disableWarnings: true });
 
@@ -11,6 +22,27 @@ interface RoutePoint {
     lat: number;
     timestamp?: string;
 }
+
+const SPANISH_DATEPICKER_STRINGS: IDatePickerStrings = {
+    months: [
+        "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+        "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+    ],
+    shortMonths: [
+        "Ene", "Feb", "Mar", "Abr", "May", "Jun",
+        "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"
+    ],
+    days: [
+        "Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"
+    ],
+    shortDays: ["D", "L", "M", "X", "J", "V", "S"],
+    goToToday: "Ir a hoy",
+    prevMonthAriaLabel: "Mes anterior",
+    nextMonthAriaLabel: "Mes siguiente",
+    prevYearAriaLabel: "Año anterior",
+    nextYearAriaLabel: "Año siguiente",
+    closeButtonAriaLabel: "Cerrar selector de fecha"
+};
 
 export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IOutputs> {
     private _container: HTMLDivElement;
@@ -48,7 +80,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private _webAPI: ComponentFramework.WebApi;
     private _root: Root;
-    private readonly _controlVersion = "v1.1.33";
+    private readonly _controlVersion = "v1.1.34";
 
     private readonly _pageSize = 5000;
     private readonly _maxPages = 20;
@@ -58,22 +90,42 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         this._container = container;
         this._webAPI = context.webAPI;
 
+        // Asegurar que el contenedor padre de Power Apps ocupe el 100% sin desbordar
+        this._container.style.width = "100%";
+        this._container.style.height = "100%";
+        this._container.style.boxSizing = "border-box";
+        this._container.style.overflow = "hidden";
+
         const mainDiv = document.createElement("div");
         mainDiv.className = "secu-rutas-container";
         mainDiv.style.display = "flex";
         mainDiv.style.flexDirection = "column";
         mainDiv.style.width = "100%";
+        mainDiv.style.maxWidth = "100%";
         mainDiv.style.height = "100%";
-        mainDiv.style.minHeight = "500px";
+        mainDiv.style.minHeight = "480px";
+        mainDiv.style.boxSizing = "border-box";
+        mainDiv.style.margin = "0";
+        mainDiv.style.padding = "6px 10px";
+        mainDiv.style.overflow = "hidden";
 
         this._headerContainer = document.createElement("div");
         this._headerContainer.className = "secu-rutas-header";
+        this._headerContainer.style.width = "100%";
+        this._headerContainer.style.maxWidth = "100%";
+        this._headerContainer.style.boxSizing = "border-box";
+        this._headerContainer.style.flex = "0 0 auto";
+        this._headerContainer.style.marginBottom = "6px";
 
         this._mapContainer = document.createElement("div");
         this._mapContainer.className = "secu-rutas-map";
         this._mapContainer.style.flex = "1 1 auto";
-        this._mapContainer.style.minHeight = "400px";
+        this._mapContainer.style.width = "100%";
+        this._mapContainer.style.minHeight = "380px";
         this._mapContainer.style.position = "relative";
+        this._mapContainer.style.boxSizing = "border-box";
+        this._mapContainer.style.borderRadius = "6px";
+        this._mapContainer.style.overflow = "hidden";
 
         mainDiv.appendChild(this._headerContainer);
         mainDiv.appendChild(this._mapContainer);
@@ -81,6 +133,12 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         const versionDiv = document.createElement("div");
         versionDiv.className = "secu-rutas-version";
         versionDiv.innerText = this._controlVersion;
+        versionDiv.style.flex = "0 0 auto";
+        versionDiv.style.fontSize = "10px";
+        versionDiv.style.lineHeight = "14px";
+        versionDiv.style.marginTop = "2px";
+        versionDiv.style.textAlign = "right";
+        versionDiv.style.color = "#8a8886";
         mainDiv.appendChild(versionDiv);
 
         this._container.appendChild(mainDiv);
@@ -89,6 +147,30 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         this.initMap();
         void this.loadResources();
     }
+
+    private getUserLocale(): string {
+        const lcid = this._context?.userSettings?.languageId;
+        if (lcid === 3082 || lcid === 1034 || lcid === 2058) {
+            return "es-ES";
+        }
+        if (typeof navigator !== "undefined" && navigator.language) {
+            return navigator.language;
+        }
+        return "es-ES";
+    }
+
+    private formatSelectedDate = (date?: Date): string => {
+        if (!date) return "";
+        const locale = this.getUserLocale();
+        const formatted = date.toLocaleDateString(locale, {
+            weekday: "short",
+            day: "2-digit",
+            month: "short",
+            year: "numeric"
+        });
+        // Capitalizar la primera letra (ej. "mié, 14 oct 2026" -> "Mié, 14 oct 2026")
+        return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+    };
 
     private initMap(): void {
         const azureMapsKey = this._context.parameters.azureMapsKey.raw;
@@ -106,7 +188,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             },
             domain: "eu.atlas.microsoft.com",
             view: "Auto",
-            language: "es-ES",
+            language: this.getUserLocale(),
             center: [-3.7038, 40.4168],
             zoom: 10,
             style: "blank"
@@ -117,7 +199,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             console.error("[SecuRutas] Error del mapa:", e);
             const inner = (e as { error?: { message?: string } })?.error;
             const msg = inner?.message ?? this.errMsg(e);
-            // Ignorar errores internos de bing-mvt si ocurrieran
             if (msg.indexOf("bing-mvt") >= 0) return;
             this._mapError = "⚠ Azure Maps: " + msg;
             this.renderHeader();
@@ -147,14 +228,14 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
     }
 
     private getAzureTileUrl(tilesetId: string, azureMapsKey: string): string {
+        const lang = this.getUserLocale();
         return "https://eu.atlas.microsoft.com/map/tile?api-version=2.1" +
             "&tilesetId=" + tilesetId +
-            "&zoom={z}&x={x}&y={y}&tileSize=256&language=es-ES&view=Auto" +
+            "&zoom={z}&x={x}&y={y}&tileSize=256&language=" + encodeURIComponent(lang) + "&view=Auto" +
             "&subscription-key=" + encodeURIComponent(azureMapsKey);
     }
 
     private setupRasterLayers(map: atlas.Map, azureMapsKey: string): void {
-        // Capa base de imágenes de satélite (solo visible en modo satélite)
         this._satelliteTileLayer = new atlas.layer.TileLayer({
             tileUrl: this.getAzureTileUrl("microsoft.imagery", azureMapsKey),
             tileSize: 256,
@@ -162,7 +243,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             visible: false
         });
 
-        // Capa principal con nombres de calles, sentidos, parques y POIs renderizados
         this._baseTileLayer = new atlas.layer.TileLayer({
             tileUrl: this.getAzureTileUrl("microsoft.base.road", azureMapsKey),
             tileSize: 256,
@@ -282,7 +362,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         const startMarker = this.createEndpointMarker(svgNamespace, "#16834b", "start");
         const endMarker = this.createEndpointMarker(svgNamespace, "#c43131", "end");
 
-        // Eventos de tooltip para Inicio y Fin
         startMarker.addEventListener("mouseenter", () => {
             if (this._routePoints.length > 0) {
                 this.showTooltip(this._routePoints[0], 0, this._routePoints.length);
@@ -304,7 +383,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         svg.appendChild(startMarker);
         svg.appendChild(endMarker);
 
-        // Tooltip flotante HTML
         const tooltip = document.createElement("div");
         tooltip.style.position = "absolute";
         tooltip.style.display = "none";
@@ -451,7 +529,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         if (!isoString) return "Sin hora";
         const d = new Date(isoString);
         if (isNaN(d.getTime())) return "Sin hora";
-        return d.toLocaleTimeString("es-ES", {
+        return d.toLocaleTimeString(this.getUserLocale(), {
             hour: "2-digit",
             minute: "2-digit",
             second: "2-digit"
@@ -629,7 +707,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                 this.setStatus("Sin registros para este recurso en ninguna fecha (¿es el usuario correcto?).");
             } else {
                 const d = new Date(res.entities[0].msdyn_date as string);
-                this.setStatus(`Sin registros ese día. Último registro del recurso: ${d.toLocaleString()}.`);
+                this.setStatus(`Sin registros ese día. Último registro: ${d.toLocaleString(this.getUserLocale())}.`);
             }
         } catch (e) {
             this.setStatus("Sin registros para ese día.");
@@ -650,27 +728,102 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
     }
 
     private renderHeader(): void {
+        // Etiqueta unificada para que los 3 selectores queden alineados al píxel
+        const unifiedLabelStyle = {
+            padding: "0 0 4px 0",
+            margin: 0,
+            fontSize: 12,
+            fontWeight: "600",
+            lineHeight: "16px",
+            height: 20,
+            boxSizing: "border-box" as const,
+            color: "#323130"
+        };
+
         const control = React.createElement(
             "div",
-            { className: "modern-header-card" },
+            {
+                className: "modern-header-card",
+                style: {
+                    width: "100%",
+                    maxWidth: "100%",
+                    boxSizing: "border-box",
+                    margin: 0,
+                    padding: "8px 16px",
+                    paddingRight: "120px", // Espacio libre a la derecha para que el logo de Securitas nunca se pise ni corte
+                    display: "flex",
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "flex-start",
+                    flexWrap: "wrap",
+                    gap: "14px",
+                    minHeight: "58px"
+                }
+            },
             React.createElement(
                 "div",
-                { className: "modern-header-title" },
-                React.createElement("h2", null, "Seguimiento de Rutas")
+                {
+                    className: "modern-header-title",
+                    style: {
+                        margin: 0,
+                        padding: "0 14px 0 0",
+                        borderBottom: "none",
+                        borderRight: "1px solid #edebe9",
+                        display: "flex",
+                        alignItems: "center",
+                        height: "38px"
+                    }
+                },
+                React.createElement(
+                    "h2",
+                    {
+                        style: {
+                            margin: 0,
+                            fontSize: "15px",
+                            fontWeight: 600,
+                            color: "#004b8b",
+                            whiteSpace: "nowrap"
+                        }
+                    },
+                    "Seguimiento de Rutas"
+                )
             ),
             React.createElement(
                 "div",
-                { className: "modern-header-controls" },
+                {
+                    className: "modern-header-controls",
+                    style: {
+                        display: "flex",
+                        flexDirection: "row",
+                        alignItems: "flex-end",
+                        flexWrap: "wrap",
+                        gap: "12px",
+                        margin: 0,
+                        padding: 0
+                    }
+                },
                 React.createElement(DatePicker, {
                     label: "Fecha",
                     value: this._selectedDate,
+                    firstDayOfWeek: DayOfWeek.Monday,
+                    strings: SPANISH_DATEPICKER_STRINGS,
+                    formatDate: this.formatSelectedDate,
                     onSelectDate: (date: Date | null | undefined) => {
                         if (date) {
                             this._selectedDate = date;
                             this.renderHeader();
                         }
                     },
-                    styles: { root: { width: 160 } }
+                    styles: {
+                        root: { width: 165, margin: 0 },
+                        textField: {
+                            root: { margin: 0 },
+                            fieldGroup: { height: 32, minHeight: 32 },
+                            subComponentStyles: {
+                                label: { root: unifiedLabelStyle }
+                            }
+                        }
+                    }
                 }),
                 React.createElement(ComboBox, {
                     label: "Recurso Técnico",
@@ -684,7 +837,11 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                         }
                     },
                     options: this._resources,
-                    styles: { root: { width: 320 } }
+                    styles: {
+                        container: { width: 250, margin: 0 },
+                        root: { height: 32, minHeight: 32 },
+                        label: unifiedLabelStyle
+                    }
                 }),
                 React.createElement(Dropdown, {
                     label: "Tipo de mapa",
@@ -697,30 +854,57 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                     onChange: (event: React.FormEvent<HTMLDivElement>, option?: IDropdownOption) => {
                         this.changeMapStyle(option);
                     },
-                    styles: { root: { width: 180 } }
+                    styles: {
+                        root: { width: 160, margin: 0 },
+                        title: { height: 32, lineHeight: "30px" },
+                        label: unifiedLabelStyle
+                    }
                 }),
                 React.createElement(IconButton, {
                     iconProps: { iconName: "Search" },
                     title: "Buscar",
                     disabled: this._loading,
                     onClick: () => { void this.fetchTrackingData(); },
-                    className: "modern-search-button"
-                })
-            ),
-            this._status
-                ? React.createElement(
-                    "div",
-                    { style: { marginTop: 6, fontSize: 12, color: "#605e5c" } },
-                    this._status
-                )
-                : null,
-            this._mapError
-                ? React.createElement(
-                    "div",
-                    { style: { marginTop: 2, fontSize: 12, color: "#a4262c" } },
-                    this._mapError
-                )
-                : null
+                    className: "modern-search-button",
+                    styles: {
+                        root: {
+                            width: 32,
+                            height: 32,
+                            margin: 0,
+                            padding: 0,
+                            borderRadius: "50%"
+                        }
+                    }
+                }),
+                this._status || this._mapError
+                    ? React.createElement(
+                        "div",
+                        {
+                            style: {
+                                display: "flex",
+                                flexDirection: "column",
+                                justifyContent: "center",
+                                minHeight: 32,
+                                paddingLeft: 4
+                            }
+                        },
+                        this._status
+                            ? React.createElement(
+                                "span",
+                                { style: { fontSize: 12, color: "#605e5c", whiteSpace: "nowrap" } },
+                                this._status
+                            )
+                            : null,
+                        this._mapError
+                            ? React.createElement(
+                                "span",
+                                { style: { fontSize: 12, color: "#a4262c", whiteSpace: "nowrap" } },
+                                this._mapError
+                            )
+                            : null
+                    )
+                    : null
+            )
         );
 
         if (!this._root) {
