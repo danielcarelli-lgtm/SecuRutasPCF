@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <manifest>
-  <control namespace="sec" constructor="SecuRutas" version="1.1.34" display-name-key="SecuRutas" description-key="SecuRutas" control-type="standard">
+  <control namespace="sec" constructor="SecuRutas" version="1.1.37" display-name-key="SecuRutas" description-key="SecuRutas" control-type="standard">
     <property name="azureMapsKey" display-name-key="Azure Maps Key" description-key="Clave de suscripcion de Azure Maps" of-type="SingleLine.Text" usage="input" required="true" />
     <property name="azureMapsUrl" display-name-key="Azure Maps URL" description-key="URL de Azure Maps" of-type="SingleLine.Text" usage="input" required="false" />
     <resources>

@@ -12,6 +12,7 @@ import {
     Dropdown,
     IDropdownOption,
     IconButton,
+    IStyle,
     initializeIcons
 } from "@fluentui/react";
 
@@ -21,6 +22,8 @@ interface RoutePoint {
     lng: number;
     lat: number;
     timestamp?: string;
+    timeMs: number;
+    percent: number;
 }
 
 const SPANISH_DATEPICKER_STRINGS: IDatePickerStrings = {
@@ -43,6 +46,8 @@ const SPANISH_DATEPICKER_STRINGS: IDatePickerStrings = {
     nextYearAriaLabel: "Año siguiente",
     closeButtonAriaLabel: "Cerrar selector de fecha"
 };
+
+const ODATA_PREFIX = String.fromCharCode(36);
 
 export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IOutputs> {
     private _container: HTMLDivElement;
@@ -80,7 +85,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private _webAPI: ComponentFramework.WebApi;
     private _root: Root;
-    private readonly _controlVersion = "v1.1.34";
+    private readonly _controlVersion = "v1.1.37";
 
     private readonly _pageSize = 5000;
     private readonly _maxPages = 20;
@@ -90,7 +95,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         this._container = container;
         this._webAPI = context.webAPI;
 
-        // Asegurar que el contenedor padre de Power Apps ocupe el 100% sin desbordar
         this._container.style.width = "100%";
         this._container.style.height = "100%";
         this._container.style.boxSizing = "border-box";
@@ -121,7 +125,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         this._mapContainer.className = "secu-rutas-map";
         this._mapContainer.style.flex = "1 1 auto";
         this._mapContainer.style.width = "100%";
-        this._mapContainer.style.minHeight = "380px";
+        this._mapContainer.style.minHeight = "360px";
         this._mapContainer.style.position = "relative";
         this._mapContainer.style.boxSizing = "border-box";
         this._mapContainer.style.borderRadius = "6px";
@@ -168,7 +172,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             month: "short",
             year: "numeric"
         });
-        // Capitalizar la primera letra (ej. "mié, 14 oct 2026" -> "Mié, 14 oct 2026")
         return formatted.charAt(0).toUpperCase() + formatted.slice(1);
     };
 
@@ -209,7 +212,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             this.createRouteOverlay();
 
             map.events.add("render", () => this.drawRoute());
-            map.events.add("movestart", () => this.hideTooltip());
+            map.events.add("movestart", () => this.highlightWaypoint(null));
 
             this._isMapReady = true;
             this.safeResize();
@@ -300,12 +303,13 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             return;
         }
 
-        this.hideTooltip();
+        this.highlightWaypoint(null);
         this._routePoints = points;
         this._routePositions = points.map(p => [p.lng, p.lat]);
 
         this.rebuildWaypointNodes();
         this.drawRoute();
+        this.renderHeader();
 
         if (points.length === 0) return;
 
@@ -364,18 +368,17 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
         startMarker.addEventListener("mouseenter", () => {
             if (this._routePoints.length > 0) {
-                this.showTooltip(this._routePoints[0], 0, this._routePoints.length);
+                this.highlightWaypoint(0);
             }
         });
-        startMarker.addEventListener("mouseleave", () => this.hideTooltip());
+        startMarker.addEventListener("mouseleave", () => this.highlightWaypoint(null));
 
         endMarker.addEventListener("mouseenter", () => {
             if (this._routePoints.length > 1) {
-                const lastIdx = this._routePoints.length - 1;
-                this.showTooltip(this._routePoints[lastIdx], lastIdx, this._routePoints.length);
+                this.highlightWaypoint(this._routePoints.length - 1);
             }
         });
-        endMarker.addEventListener("mouseleave", () => this.hideTooltip());
+        endMarker.addEventListener("mouseleave", () => this.highlightWaypoint(null));
 
         svg.appendChild(halo);
         svg.appendChild(line);
@@ -457,7 +460,6 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         const total = this._routePoints.length;
 
         for (let i = 1; i < total - 1; i++) {
-            const point = this._routePoints[i];
             const circle = document.createElementNS(svgNamespace, "circle");
             circle.setAttribute("r", "4.5");
             circle.setAttribute("fill", "#ffffff");
@@ -468,20 +470,75 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             circle.style.filter = "drop-shadow(0 1px 1px rgba(0,0,0,0.3))";
 
             circle.addEventListener("mouseenter", () => {
-                circle.setAttribute("r", "7");
-                circle.setAttribute("fill", "#e8f2fc");
-                this.showTooltip(point, i, total);
+                this.highlightWaypoint(i);
             });
 
             circle.addEventListener("mouseleave", () => {
-                circle.setAttribute("r", "4.5");
-                circle.setAttribute("fill", "#ffffff");
-                this.hideTooltip();
+                this.highlightWaypoint(null);
             });
 
             this._waypointsGroup.appendChild(circle);
             this._waypointCircles.push(circle);
         }
+    }
+
+    private highlightWaypoint(index: number | null): void {
+        for (let i = 0; i < this._waypointCircles.length; i++) {
+            const c = this._waypointCircles[i];
+            if (index !== null && i + 1 === index) {
+                c.setAttribute("r", "7.5");
+                c.setAttribute("fill", "#ffaa44");
+                c.setAttribute("stroke", "#004b8b");
+                c.setAttribute("stroke-width", "2.5");
+            } else {
+                c.setAttribute("r", "4.5");
+                c.setAttribute("fill", "#ffffff");
+                c.setAttribute("stroke", "#004b8b");
+                c.setAttribute("stroke-width", "2");
+            }
+        }
+
+        if (this._headerContainer) {
+            const dots = this._headerContainer.querySelectorAll("[data-tl-idx]");
+            dots.forEach((el) => {
+                const htmlEl = el as HTMLElement;
+                const dotIdx = parseInt(htmlEl.getAttribute("data-tl-idx") ?? "-1", 10);
+                const isEndpoint = dotIdx === 0 || dotIdx === this._routePoints.length - 1;
+                if (index !== null && dotIdx === index) {
+                    htmlEl.style.transform = "translate(-50%, -50%) scale(1.45)";
+                    htmlEl.style.zIndex = "6";
+                    htmlEl.style.boxShadow = "0 0 0 3px rgba(0, 75, 139, 0.28)";
+                    if (!isEndpoint) {
+                        htmlEl.style.backgroundColor = "#ffaa44";
+                    }
+                } else {
+                    htmlEl.style.transform = "translate(-50%, -50%) scale(1)";
+                    htmlEl.style.zIndex = isEndpoint ? "3" : "2";
+                    htmlEl.style.boxShadow = "0 1px 2px rgba(0,0,0,0.25)";
+                    if (!isEndpoint) {
+                        htmlEl.style.backgroundColor = "#ffffff";
+                    }
+                }
+            });
+        }
+
+        if (index === null || index < 0 || index >= this._routePoints.length) {
+            this.hideTooltip();
+            return;
+        }
+
+        this.showTooltip(this._routePoints[index], index, this._routePoints.length);
+    }
+
+    private focusWaypointOnMap(index: number): void {
+        if (!this._map || index < 0 || index >= this._routePoints.length) return;
+        const pt = this._routePoints[index];
+        const currentZoom = this._map.getCamera().zoom ?? 14;
+        this._map.setCamera({
+            center: [pt.lng, pt.lat],
+            zoom: Math.max(currentZoom, 15)
+        });
+        this.highlightWaypoint(index);
     }
 
     private showTooltip(point: RoutePoint, index: number, total: number): void {
@@ -493,26 +550,28 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         const px = pixels[0];
         if (!Number.isFinite(px[0]) || !Number.isFinite(px[1])) return;
 
-        let label = `Waypoint #${index}`;
+        let label = "Waypoint #" + index;
         let badgeColor = "#004b8b";
         if (index === 0) {
-            label = "Inicio de ruta";
+            label = "Inicio de ruta (0%)";
             badgeColor = "#16834b";
         } else if (index === total - 1) {
-            label = `Fin de ruta (#${index})`;
+            label = "Fin de ruta (#" + index + " · 100%)";
             badgeColor = "#c43131";
+        } else {
+            label = "Waypoint #" + index + " (" + point.percent.toFixed(1) + "% del tiempo)";
         }
 
         const timeStr = this.formatTimestamp(point.timestamp);
-        const coordsStr = `${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+        const coordsStr = point.lat.toFixed(5) + ", " + point.lng.toFixed(5);
 
         this._tooltipEl.innerHTML =
-            `<div style="font-weight: 600; color: ${badgeColor}; margin-bottom: 3px;">${label}</div>` +
-            `<div><strong>Hora:</strong> ${timeStr}</div>` +
-            `<div><strong>Geoposición:</strong> ${coordsStr}</div>`;
+            "<div style=\"font-weight: 600; color: " + badgeColor + "; margin-bottom: 3px;\">" + label + "</div>" +
+            "<div><strong>Hora:</strong> " + timeStr + "</div>" +
+            "<div><strong>Geoposición:</strong> " + coordsStr + "</div>";
 
-        this._tooltipEl.style.left = `${px[0]}px`;
-        this._tooltipEl.style.top = `${px[1]}px`;
+        this._tooltipEl.style.left = px[0] + "px";
+        this._tooltipEl.style.top = px[1] + "px";
         this._tooltipEl.style.transform = px[1] < 85
             ? "translate(-50%, 16px)"
             : "translate(-50%, calc(-100% - 16px))";
@@ -536,6 +595,27 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         });
     }
 
+    private formatShortTimeFromMs(ms: number): string {
+        if (!Number.isFinite(ms)) return "--:--";
+        const d = new Date(ms);
+        return d.toLocaleTimeString(this.getUserLocale(), {
+            hour: "2-digit",
+            minute: "2-digit"
+        });
+    }
+
+    private formatDurationMs(durationMs: number): string {
+        if (!Number.isFinite(durationMs) || durationMs <= 0) return "0 min";
+        const totalSeconds = Math.floor(durationMs / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        if (hours > 0) {
+            const minPadded = minutes < 10 ? "0" + minutes : String(minutes);
+            return hours + "h " + minPadded + "m";
+        }
+        return minutes + " min";
+    }
+
     private drawRoute(): void {
         if (!this._map || !this._routeSvg || !this._routeHalo || !this._routeLine || !this._startMarker || !this._endMarker) return;
 
@@ -556,13 +636,13 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         if (this._routePositions.length === 1) {
             this._routeHalo.setAttribute("points", "");
             this._routeLine.setAttribute("points", "");
-            this._startMarker.setAttribute("transform", `translate(${pixels[0][0]} ${pixels[0][1]})`);
+            this._startMarker.setAttribute("transform", "translate(" + pixels[0][0] + " " + pixels[0][1] + ")");
             this._startMarker.removeAttribute("display");
             this._endMarker.setAttribute("display", "none");
             return;
         }
 
-        const path = pixels.map(pixel => `${pixel[0]},${pixel[1]}`).join(" ");
+        const path = pixels.map(pixel => pixel[0] + "," + pixel[1]).join(" ");
         this._routeHalo.setAttribute("points", path);
         this._routeLine.setAttribute("points", path);
 
@@ -579,8 +659,8 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         }
 
         const lastPixel = pixels[pixels.length - 1];
-        this._startMarker.setAttribute("transform", `translate(${pixels[0][0]} ${pixels[0][1]})`);
-        this._endMarker.setAttribute("transform", `translate(${lastPixel[0]} ${lastPixel[1]})`);
+        this._startMarker.setAttribute("transform", "translate(" + pixels[0][0] + " " + pixels[0][1] + ")");
+        this._endMarker.setAttribute("transform", "translate(" + lastPixel[0] + " " + lastPixel[1] + ")");
         this._startMarker.removeAttribute("display");
         this._endMarker.removeAttribute("display");
     }
@@ -594,7 +674,11 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private async loadResources(): Promise<void> {
         try {
-            const queryOptions = "?$select=name,_userid_value&$filter=statecode eq 0 and _userid_value ne null&$orderby=name asc";
+            const queryOptions =
+                "?" + ODATA_PREFIX + "select=name,_userid_value" +
+                "&" + ODATA_PREFIX + "filter=statecode eq 0 and _userid_value ne null" +
+                "&" + ODATA_PREFIX + "orderby=name asc";
+
             const result = await this._webAPI.retrieveMultipleRecords("bookableresource", queryOptions);
 
             this._resources = result.entities.map((entity: ComponentFramework.WebApi.Entity) => ({
@@ -606,7 +690,7 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                 this._selectedResource = this._resources[0].key as string;
             }
 
-            this.setStatus(`${this._resources.length} recursos cargados.`);
+            this.setStatus(this._resources.length + " recursos cargados.");
         } catch (error) {
             console.error("[SecuRutas] Error cargando recursos:", error);
             this.setStatus("⚠ Error cargando recursos: " + this.errMsg(error));
@@ -647,10 +731,11 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
             const startStr = startOfDay.toISOString();
             const endStr = endOfDay.toISOString();
 
-            const options = "?$select=msdyn_latitude,msdyn_longitude,msdyn_date" +
-                "&$filter=_msdyn_userid_value eq " + this._selectedResource +
+            const options =
+                "?" + ODATA_PREFIX + "select=msdyn_latitude,msdyn_longitude,msdyn_date" +
+                "&" + ODATA_PREFIX + "filter=_msdyn_userid_value eq " + this._selectedResource +
                 " and msdyn_date ge " + startStr + " and msdyn_date le " + endStr +
-                "&$orderby=msdyn_date asc";
+                "&" + ODATA_PREFIX + "orderby=msdyn_date asc";
 
             const entities = await this.fetchAll("msdyn_geolocationtracking", options);
 
@@ -663,24 +748,46 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
                 if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) continue;
 
+                const timestampStr = entity.msdyn_date as string | undefined;
+                const parsedMs = timestampStr ? new Date(timestampStr).getTime() : NaN;
+
                 const last = points[points.length - 1];
                 if (!last || last.lng !== lng || last.lat !== lat) {
                     points.push({
                         lng,
                         lat,
-                        timestamp: entity.msdyn_date as string | undefined
+                        timestamp: timestampStr,
+                        timeMs: parsedMs,
+                        percent: 0
                     });
+                }
+            }
+
+            if (points.length === 1) {
+                points[0].percent = 0;
+            } else if (points.length > 1) {
+                const startMs = points[0].timeMs;
+                const endMs = points[points.length - 1].timeMs;
+                const totalSpanMs = endMs - startMs;
+
+                for (let i = 0; i < points.length; i++) {
+                    if (Number.isFinite(totalSpanMs) && totalSpanMs > 0 && Number.isFinite(points[i].timeMs)) {
+                        const rawPct = ((points[i].timeMs - startMs) / totalSpanMs) * 100;
+                        points[i].percent = Math.max(0, Math.min(100, rawPct));
+                    } else {
+                        points[i].percent = (i / (points.length - 1)) * 100;
+                    }
                 }
             }
 
             if (entities.length === 0) {
                 await this.explainEmptyResult();
             } else if (points.length === 0) {
-                this.setStatus(`${entities.length} registros, pero ninguno con coordenadas válidas.`);
+                this.setStatus(entities.length + " registros, pero ninguno con coordenadas válidas.");
             } else if (points.length === 1) {
-                this.setStatus(`${entities.length} registros, pero todos en la misma posición.`);
+                this.setStatus(entities.length + " registros, pero todos en la misma posición.");
             } else {
-                this.setStatus(`${entities.length} registros → ${points.length} puntos en la ruta.`);
+                this.setStatus(entities.length + " registros → " + points.length + " puntos en la ruta.");
             }
 
             if (!this._isMapReady) {
@@ -700,16 +807,21 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
 
     private async explainEmptyResult(): Promise<void> {
         try {
-            const queryOptions = "?$select=msdyn_date&$filter=_msdyn_userid_value eq " + this._selectedResource + "&$orderby=msdyn_date desc&$top=1";
+            const queryOptions =
+                "?" + ODATA_PREFIX + "select=msdyn_date" +
+                "&" + ODATA_PREFIX + "filter=_msdyn_userid_value eq " + this._selectedResource +
+                "&" + ODATA_PREFIX + "orderby=msdyn_date desc" +
+                "&" + ODATA_PREFIX + "top=1";
+
             const res = await this._webAPI.retrieveMultipleRecords("msdyn_geolocationtracking", queryOptions);
 
             if (res.entities.length === 0) {
                 this.setStatus("Sin registros para este recurso en ninguna fecha (¿es el usuario correcto?).");
             } else {
                 const d = new Date(res.entities[0].msdyn_date as string);
-                this.setStatus(`Sin registros ese día. Último registro: ${d.toLocaleString(this.getUserLocale())}.`);
+                this.setStatus("Sin registros ese día. Último registro: " + d.toLocaleString(this.getUserLocale()) + ".");
             }
-        } catch (e) {
+        } catch {
             this.setStatus("Sin registros para ese día.");
         }
     }
@@ -727,13 +839,213 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
         return String(error);
     }
 
+    private renderTimelineBar(): React.ReactElement | null {
+        if (this._routePoints.length === 0) return null;
+
+        const firstPt = this._routePoints[0];
+        const lastPt = this._routePoints[this._routePoints.length - 1];
+        const startMs = firstPt.timeMs;
+        const endMs = lastPt.timeMs;
+        const spanMs = endMs - startMs;
+
+        const startTimeLabel = this.formatTimestamp(firstPt.timestamp);
+        const endTimeLabel = this.formatTimestamp(lastPt.timestamp);
+        const durationLabel = this.formatDurationMs(spanMs);
+
+        const tickFractions = [0, 0.25, 0.5, 0.75, 1];
+
+        return React.createElement(
+            "div",
+            {
+                style: {
+                    width: "100%",
+                    boxSizing: "border-box",
+                    borderTop: "1px solid #edebe9",
+                    paddingTop: "6px",
+                    marginTop: "2px",
+                    display: "flex",
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: "12px"
+                }
+            },
+            React.createElement(
+                "div",
+                {
+                    style: {
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        flex: "0 0 auto"
+                    }
+                },
+                React.createElement("span", {
+                    style: {
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        backgroundColor: "#16834b",
+                        display: "inline-block",
+                        boxShadow: "0 0 0 2px #e6f4ec"
+                    }
+                }),
+                React.createElement(
+                    "div",
+                    { style: { display: "flex", flexDirection: "column", lineHeight: "1.15" } },
+                    React.createElement("span", { style: { fontSize: 10, color: "#605e5c", fontWeight: 600 } }, "INICIO (0%)"),
+                    React.createElement("span", { style: { fontSize: 12, color: "#201f1e", fontWeight: 600 } }, startTimeLabel)
+                )
+            ),
+            React.createElement(
+                "div",
+                {
+                    style: {
+                        flex: "1 1 auto",
+                        display: "flex",
+                        flexDirection: "column",
+                        position: "relative",
+                        padding: "6px 6px 14px 6px"
+                    }
+                },
+                React.createElement(
+                    "div",
+                    {
+                        style: {
+                            position: "relative",
+                            width: "100%",
+                            height: "6px",
+                            backgroundColor: "#e1dfdd",
+                            borderRadius: "3px"
+                        }
+                    },
+                    React.createElement("div", {
+                        style: {
+                            position: "absolute",
+                            left: 0,
+                            top: 0,
+                            width: "100%",
+                            height: "100%",
+                            background: "linear-gradient(90deg, #16834b 0%, #004b8b 15%, #004b8b 85%, #c43131 100%)",
+                            borderRadius: "3px",
+                            opacity: 0.85
+                        }
+                    }),
+                    this._routePoints.map((pt, idx) => {
+                        const isStart = idx === 0;
+                        const isEnd = idx === this._routePoints.length - 1 && this._routePoints.length > 1;
+                        const size = isStart || isEnd ? 13 : 9;
+                        const bg = isStart ? "#16834b" : isEnd ? "#c43131" : "#ffffff";
+                        const border = isStart || isEnd ? "2px solid #ffffff" : "2px solid #004b8b";
+                        const timeLabel = this.formatTimestamp(pt.timestamp);
+                        const titleText = isStart
+                            ? "Inicio · " + timeLabel + " (0%)"
+                            : isEnd
+                                ? "Fin (#" + idx + ") · " + timeLabel + " (100%)"
+                                : "Waypoint #" + idx + " · " + timeLabel + " (" + pt.percent.toFixed(1) + "%)";
+
+                        return React.createElement("div", {
+                            key: "tl-pt-" + idx,
+                            "data-tl-idx": String(idx),
+                            title: titleText,
+                            onMouseEnter: () => this.highlightWaypoint(idx),
+                            onMouseLeave: () => this.highlightWaypoint(null),
+                            onClick: () => this.focusWaypointOnMap(idx),
+                            style: {
+                                position: "absolute",
+                                left: pt.percent + "%",
+                                top: "50%",
+                                width: size + "px",
+                                height: size + "px",
+                                borderRadius: "50%",
+                                backgroundColor: bg,
+                                border: border,
+                                transform: "translate(-50%, -50%) scale(1)",
+                                transition: "transform 0.12s ease, background-color 0.12s ease, box-shadow 0.12s ease",
+                                cursor: "pointer",
+                                zIndex: isStart || isEnd ? 3 : 2,
+                                boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+                                boxSizing: "border-box"
+                            }
+                        });
+                    }),
+                    Number.isFinite(spanMs) && spanMs > 0
+                        ? tickFractions.map((fraction, tIdx) => {
+                            const tickMs = startMs + spanMs * fraction;
+                            const pct = fraction * 100;
+                            return React.createElement(
+                                "span",
+                                {
+                                    key: "tl-tick-" + tIdx,
+                                    style: {
+                                        position: "absolute",
+                                        left: pct + "%",
+                                        top: "10px",
+                                        transform: "translateX(-50%)",
+                                        fontSize: "10px",
+                                        color: "#8a8886",
+                                        whiteSpace: "nowrap",
+                                        pointerEvents: "none",
+                                        userSelect: "none"
+                                    }
+                                },
+                                this.formatShortTimeFromMs(tickMs) + " (" + Math.round(pct) + "%)"
+                            );
+                        })
+                        : null
+                )
+            ),
+            React.createElement(
+                "div",
+                {
+                    style: {
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        flex: "0 0 auto"
+                    }
+                },
+                React.createElement(
+                    "div",
+                    { style: { display: "flex", flexDirection: "column", textAlign: "right", lineHeight: "1.15" } },
+                    React.createElement("span", { style: { fontSize: 10, color: "#605e5c", fontWeight: 600 } }, "FIN (100%)"),
+                    React.createElement("span", { style: { fontSize: 12, color: "#201f1e", fontWeight: 600 } }, endTimeLabel)
+                ),
+                React.createElement("span", {
+                    style: {
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        backgroundColor: "#c43131",
+                        display: "inline-block",
+                        boxShadow: "0 0 0 2px #fde7e9"
+                    }
+                }),
+                React.createElement(
+                    "span",
+                    {
+                        style: {
+                            marginLeft: "4px",
+                            padding: "2px 8px",
+                            backgroundColor: "#f3f2f1",
+                            borderRadius: "10px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            color: "#004b8b",
+                            whiteSpace: "nowrap"
+                        }
+                    },
+                    "⏱ " + durationLabel
+                )
+            )
+        );
+    }
+
     private renderHeader(): void {
-        // Etiqueta unificada para que los 3 selectores queden alineados al píxel
-        const unifiedLabelStyle = {
+        const unifiedLabelStyle: IStyle = {
             padding: "0 0 4px 0",
             margin: 0,
             fontSize: 12,
-            fontWeight: "600",
+            fontWeight: 600 as const,
             lineHeight: "16px",
             height: 20,
             boxSizing: "border-box" as const,
@@ -750,161 +1062,173 @@ export class SecuRutas implements ComponentFramework.StandardControl<IInputs, IO
                     boxSizing: "border-box",
                     margin: 0,
                     padding: "8px 16px",
-                    paddingRight: "120px", // Espacio libre a la derecha para que el logo de Securitas nunca se pise ni corte
                     display: "flex",
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "flex-start",
-                    flexWrap: "wrap",
-                    gap: "14px",
-                    minHeight: "58px"
+                    flexDirection: "column",
+                    gap: "6px"
                 }
             },
             React.createElement(
                 "div",
                 {
-                    className: "modern-header-title",
                     style: {
-                        margin: 0,
-                        padding: "0 14px 0 0",
-                        borderBottom: "none",
-                        borderRight: "1px solid #edebe9",
+                        width: "100%",
+                        boxSizing: "border-box",
+                        paddingRight: "120px",
                         display: "flex",
+                        flexDirection: "row",
                         alignItems: "center",
-                        height: "38px"
+                        justifyContent: "flex-start",
+                        flexWrap: "wrap",
+                        gap: "14px"
                     }
                 },
                 React.createElement(
-                    "h2",
+                    "div",
                     {
+                        className: "modern-header-title",
                         style: {
                             margin: 0,
-                            fontSize: "15px",
-                            fontWeight: 600,
-                            color: "#004b8b",
-                            whiteSpace: "nowrap"
+                            padding: "0 14px 0 0",
+                            borderBottom: "none",
+                            borderRight: "1px solid #edebe9",
+                            display: "flex",
+                            alignItems: "center",
+                            height: "38px"
                         }
                     },
-                    "Seguimiento de Rutas"
-                )
-            ),
-            React.createElement(
-                "div",
-                {
-                    className: "modern-header-controls",
-                    style: {
-                        display: "flex",
-                        flexDirection: "row",
-                        alignItems: "flex-end",
-                        flexWrap: "wrap",
-                        gap: "12px",
-                        margin: 0,
-                        padding: 0
-                    }
-                },
-                React.createElement(DatePicker, {
-                    label: "Fecha",
-                    value: this._selectedDate,
-                    firstDayOfWeek: DayOfWeek.Monday,
-                    strings: SPANISH_DATEPICKER_STRINGS,
-                    formatDate: this.formatSelectedDate,
-                    onSelectDate: (date: Date | null | undefined) => {
-                        if (date) {
-                            this._selectedDate = date;
-                            this.renderHeader();
-                        }
-                    },
-                    styles: {
-                        root: { width: 165, margin: 0 },
-                        textField: {
-                            root: { margin: 0 },
-                            fieldGroup: { height: 32, minHeight: 32 },
-                            subComponentStyles: {
-                                label: { root: unifiedLabelStyle }
-                            }
-                        }
-                    }
-                }),
-                React.createElement(ComboBox, {
-                    label: "Recurso Técnico",
-                    selectedKey: this._selectedResource,
-                    allowFreeform: true,
-                    autoComplete: "on",
-                    onChange: (event: React.FormEvent<IComboBox>, option?: IComboBoxOption) => {
-                        if (option) {
-                            this._selectedResource = option.key as string;
-                            this.renderHeader();
-                        }
-                    },
-                    options: this._resources,
-                    styles: {
-                        container: { width: 250, margin: 0 },
-                        root: { height: 32, minHeight: 32 },
-                        label: unifiedLabelStyle
-                    }
-                }),
-                React.createElement(Dropdown, {
-                    label: "Tipo de mapa",
-                    selectedKey: this._selectedMapStyle,
-                    options: [
-                        { key: "road", text: "Normal (Azure)" },
-                        { key: "osm", text: "Callejero (OSM)" },
-                        { key: "satellite_road_labels", text: "Satélite" }
-                    ],
-                    onChange: (event: React.FormEvent<HTMLDivElement>, option?: IDropdownOption) => {
-                        this.changeMapStyle(option);
-                    },
-                    styles: {
-                        root: { width: 160, margin: 0 },
-                        title: { height: 32, lineHeight: "30px" },
-                        label: unifiedLabelStyle
-                    }
-                }),
-                React.createElement(IconButton, {
-                    iconProps: { iconName: "Search" },
-                    title: "Buscar",
-                    disabled: this._loading,
-                    onClick: () => { void this.fetchTrackingData(); },
-                    className: "modern-search-button",
-                    styles: {
-                        root: {
-                            width: 32,
-                            height: 32,
-                            margin: 0,
-                            padding: 0,
-                            borderRadius: "50%"
-                        }
-                    }
-                }),
-                this._status || this._mapError
-                    ? React.createElement(
-                        "div",
+                    React.createElement(
+                        "h2",
                         {
                             style: {
-                                display: "flex",
-                                flexDirection: "column",
-                                justifyContent: "center",
-                                minHeight: 32,
-                                paddingLeft: 4
+                                margin: 0,
+                                fontSize: "15px",
+                                fontWeight: 600,
+                                color: "#004b8b",
+                                whiteSpace: "nowrap"
                             }
                         },
-                        this._status
-                            ? React.createElement(
-                                "span",
-                                { style: { fontSize: 12, color: "#605e5c", whiteSpace: "nowrap" } },
-                                this._status
-                            )
-                            : null,
-                        this._mapError
-                            ? React.createElement(
-                                "span",
-                                { style: { fontSize: 12, color: "#a4262c", whiteSpace: "nowrap" } },
-                                this._mapError
-                            )
-                            : null
+                        "Seguimiento de Rutas"
                     )
-                    : null
-            )
+                ),
+                React.createElement(
+                    "div",
+                    {
+                        className: "modern-header-controls",
+                        style: {
+                            display: "flex",
+                            flexDirection: "row",
+                            alignItems: "flex-end",
+                            flexWrap: "wrap",
+                            gap: "12px",
+                            margin: 0,
+                            padding: 0
+                        }
+                    },
+                    React.createElement(DatePicker, {
+                        label: "Fecha",
+                        value: this._selectedDate,
+                        firstDayOfWeek: DayOfWeek.Monday,
+                        strings: SPANISH_DATEPICKER_STRINGS,
+                        formatDate: this.formatSelectedDate,
+                        onSelectDate: (date: Date | null | undefined) => {
+                            if (date) {
+                                this._selectedDate = date;
+                                this.renderHeader();
+                            }
+                        },
+                        styles: {
+                            root: { width: 165, margin: 0 },
+                            textField: {
+                                root: { margin: 0 },
+                                fieldGroup: { height: 32, minHeight: 32 },
+                                subComponentStyles: {
+                                    label: { root: unifiedLabelStyle }
+                                }
+                            }
+                        }
+                    }),
+                    React.createElement(ComboBox, {
+                        label: "Recurso Técnico",
+                        selectedKey: this._selectedResource,
+                        allowFreeform: true,
+                        autoComplete: "on",
+                        onChange: (event: React.FormEvent<IComboBox>, option?: IComboBoxOption) => {
+                            if (option) {
+                                this._selectedResource = option.key as string;
+                                this.renderHeader();
+                            }
+                        },
+                        options: this._resources,
+                        styles: {
+                            container: { width: 250, margin: 0 },
+                            root: { height: 32, minHeight: 32 },
+                            label: unifiedLabelStyle
+                        }
+                    }),
+                    React.createElement(Dropdown, {
+                        label: "Tipo de mapa",
+                        selectedKey: this._selectedMapStyle,
+                        options: [
+                            { key: "road", text: "Normal (Azure)" },
+                            { key: "osm", text: "Callejero (OSM)" },
+                            { key: "satellite_road_labels", text: "Satélite" }
+                        ],
+                        onChange: (event: React.FormEvent<HTMLDivElement>, option?: IDropdownOption) => {
+                            this.changeMapStyle(option);
+                        },
+                        styles: {
+                            root: { width: 160, margin: 0 },
+                            title: { height: 32, lineHeight: "30px" },
+                            label: unifiedLabelStyle
+                        }
+                    }),
+                    React.createElement(IconButton, {
+                        iconProps: { iconName: "Search" },
+                        title: "Buscar",
+                        disabled: this._loading,
+                        onClick: () => { void this.fetchTrackingData(); },
+                        className: "modern-search-button",
+                        styles: {
+                            root: {
+                                width: 32,
+                                height: 32,
+                                margin: 0,
+                                padding: 0,
+                                borderRadius: "50%"
+                            }
+                        }
+                    }),
+                    this._status || this._mapError
+                        ? React.createElement(
+                            "div",
+                            {
+                                style: {
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    justifyContent: "center",
+                                    minHeight: 32,
+                                    paddingLeft: 4
+                                }
+                            },
+                            this._status
+                                ? React.createElement(
+                                    "span",
+                                    { style: { fontSize: 12, color: "#605e5c", whiteSpace: "nowrap" } },
+                                    this._status
+                                )
+                                : null,
+                            this._mapError
+                                ? React.createElement(
+                                    "span",
+                                    { style: { fontSize: 12, color: "#a4262c", whiteSpace: "nowrap" } },
+                                    this._mapError
+                                )
+                                : null
+                        )
+                        : null
+                )
+            ),
+            this.renderTimelineBar()
         );
 
         if (!this._root) {
